@@ -1,7 +1,9 @@
 import datetime
+import os
 import tempfile
 from pathlib import Path
 
+import psutil
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from videocaptioner.core.asr.asr_data import ASRData
@@ -16,14 +18,43 @@ class VideoSynthesisThread(QThread):
     finished = pyqtSignal(SynthesisTask)
     progress = pyqtSignal(int, str)
     error = pyqtSignal(str)
+    cancelled = pyqtSignal()
 
     def __init__(self, task: SynthesisTask):
         super().__init__()
         self.task = task
+        self._stop_requested = False
         logger.debug(f"初始化 VideoSynthesisThread，任务: {self.task}")
+
+    def stop(self):
+        """Request cancellation and terminate FFmpeg children owned by the app."""
+        self._stop_requested = True
+        self.requestInterruption()
+        try:
+            parent = psutil.Process(os.getpid())
+            for child in parent.children(recursive=True):
+                try:
+                    if child.name().lower() in {"ffmpeg.exe", "ffmpeg"}:
+                        child.terminate()
+                        try:
+                            child.wait(timeout=2)
+                        except psutil.TimeoutExpired:
+                            child.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    def _remove_partial_output(self):
+        output_path = getattr(self.task, "output_path", None)
+        if output_path:
+            Path(output_path).unlink(missing_ok=True)
 
     def run(self):
         try:
+            if self._stop_requested:
+                self.cancelled.emit()
+                return
             self.task.started_at = datetime.datetime.now()
             config = self.task.synthesis_config
             logger.info(f"\n{config.print_config()}")
@@ -101,11 +132,18 @@ class VideoSynthesisThread(QThread):
             self.finished.emit(self.task)
 
         except Exception as e:
+            if self._stop_requested or self.isInterruptionRequested():
+                self._remove_partial_output()
+                logger.info("视频合成已由用户停止")
+                self.cancelled.emit()
+                return
             logger.exception(f"视频合成失败: {e}")
             self.error.emit(str(e))
             self.progress.emit(100, self.tr("视频合成失败"))
 
     def progress_callback(self, value, message):
+        if self._stop_requested or self.isInterruptionRequested():
+            raise RuntimeError("Synthesis cancelled by user")
         progress = int(5 + int(value) / 100 * 95)
         logger.debug(f"合成进度: {progress}% - {message}")
         self.progress.emit(progress, str(progress) + "% " + message)

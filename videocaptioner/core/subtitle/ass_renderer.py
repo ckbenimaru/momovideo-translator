@@ -11,6 +11,10 @@ from PIL import Image
 
 from videocaptioner.config import CACHE_PATH, FONTS_PATH, RESOURCE_PATH
 from videocaptioner.core.entities import SubtitleLayoutEnum
+from videocaptioner.core.utils.encoding_policy import (
+    build_mac_encoding_args,
+    get_target_bitrate_kbps,
+)
 from videocaptioner.core.utils.logger import setup_logger
 
 from .ass_utils import auto_wrap_ass_file
@@ -24,6 +28,7 @@ ASS_TEMPLATE = """[Script Info]
 ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
+ScaledBorderAndShadow: yes
 
 {style_str}
 
@@ -228,6 +233,8 @@ def _get_video_resolution(video_path: str) -> Tuple[int, int]:
         ["ffmpeg", "-i", video_path],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         creationflags=(
             getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         ),
@@ -318,24 +325,41 @@ def render_ass_video(
             logger.debug("Using CUDA acceleration")
             cmd.extend(["-hwaccel", "cuda"])
 
-        cmd.extend(
-            [
-                "-i",
-                video_path,
-                "-acodec",
-                "copy",
-                "-vcodec",
-                vcodec,
-                "-crf",
-                str(crf),
-                "-preset",
-                preset,
-                "-vf",
-                vf,
-                "-y",
-                output_path,
-            ]
-        )
+        cmd.extend(["-i", video_path])
+        using_nvenc = False
+        if vcodec == "libvpx-vp9":
+            cmd.extend(
+                [
+                    "-c:a",
+                    "copy",
+                    "-c:v",
+                    vcodec,
+                    "-crf",
+                    str(crf),
+                    "-preset",
+                    preset,
+                ]
+            )
+        else:
+            encoding_args, source_info, max_rate = build_mac_encoding_args(
+                video_path, output_path, crf, preset
+            )
+            using_nvenc = "h264_nvenc" in encoding_args
+            target_rate_k = get_target_bitrate_kbps(crf)
+            logger.info(
+                "Mac-compatible encode: encoder=%s, source=%s %dx%d %.3ffps "
+                "%.2fMbps, target=%dkbps, maxrate=%.2fMbps",
+                "h264_nvenc P5 VBR" if using_nvenc else f"libx264 {preset} VBR",
+                source_info.codec,
+                source_info.width,
+                source_info.height,
+                source_info.fps,
+                source_info.bit_rate / 1_000_000,
+                target_rate_k,
+                max_rate / 1_000_000,
+            )
+            cmd.extend(encoding_args)
+        cmd.extend(["-vf", vf, "-y", output_path])
 
         cmd_str = subprocess.list2cmdline(cmd)
         logger.debug(f"FFmpeg ASS render cmd: {cmd_str}")
@@ -388,19 +412,57 @@ def render_ass_video(
                     progress = (current_time / total_duration) * 100
                     progress_callback(f"{round(progress)}", "正在合成")
 
-            if progress_callback:
-                progress_callback("100", "合成完成")
-
             # 检查Return code
             return_code = process.wait()
+            error_info = process.stderr.read() if process.stderr else ""
+            if return_code != 0 and using_nvenc:
+                # The callback also carries the UI thread's cancellation check.
+                # If the user stopped FFmpeg, abort here instead of mistakenly
+                # treating the terminated process as an NVENC failure.
+                if progress_callback:
+                    progress_callback("0", "NVENC失敗，正在切換CPU編碼")
+                logger.warning(
+                    "NVENC encoding failed (code %s); retrying with libx264",
+                    return_code,
+                )
+                fallback_args, _, _ = build_mac_encoding_args(
+                    video_path,
+                    output_path,
+                    crf,
+                    preset,
+                    prefer_hardware=False,
+                )
+                fallback_cmd = ["ffmpeg"]
+                fallback_cmd.extend(
+                    ["-i", video_path, *fallback_args, "-vf", vf, "-y", output_path]
+                )
+                fallback_result = subprocess.run(
+                    fallback_cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=(
+                        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                        if os.name == "nt"
+                        else 0
+                    ),
+                )
+                return_code = fallback_result.returncode
+                error_info = fallback_result.stderr
+                if return_code == 0:
+                    logger.info("NVENC fallback completed successfully with libx264")
+
             if return_code != 0:
-                error_info = process.stderr.read()
                 logger.error("FFmpeg ASS rendering failed")
                 logger.error(f"Return code: {return_code}")
                 logger.error(f"Command: {cmd_str}")
                 if error_info:
                     logger.error(f"Error output: {error_info}")
                 raise Exception(f"FFmpeg Return code: {return_code}")
+
+            if progress_callback:
+                progress_callback("100", "合成完成")
 
             logger.debug("ASS subtitle rendering complete")
 

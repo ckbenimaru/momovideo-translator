@@ -11,16 +11,111 @@ from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 from PIL import Image, ImageDraw
 
 from videocaptioner.core.entities import SubtitleLayoutEnum
+from videocaptioner.core.utils.encoding_policy import (
+    build_mac_encoding_args,
+    get_target_bitrate_kbps,
+)
 from videocaptioner.core.utils.logger import setup_logger
 
 from .font_utils import FontType, get_font
 from .styles import RoundedBgStyle
-from .text_utils import hex_to_rgba, wrap_text
+from .text_utils import hex_to_rgba, is_mainly_cjk, wrap_text
 
 if TYPE_CHECKING:
     from videocaptioner.core.asr.asr_data import ASRData
 
 logger = setup_logger("subtitle.rounded")
+
+_TRADITIONAL_HINTS = set(
+    "這個們來為與說時會後裡點體臺灣國學實發現開關過還進讓從對將於長見門間"
+    "風電車書話語網畫頭聲應處無萬專業廣東龍麼麼麼愛歸區號檔預設顯示邊陰"
+)
+
+
+def _font_name_for_text(text: str, style: RoundedBgStyle) -> str:
+    """Choose region-correct Noto Sans family for the subtitle text."""
+    if not is_mainly_cjk(text):
+        return style.font_name_en
+    if any(char in _TRADITIONAL_HINTS for char in text):
+        return style.font_name_tc
+    return style.font_name_sc
+
+
+def _split_by_character_limit(text: str, limit: int, cjk: bool) -> List[str]:
+    """Split without truncating, respecting explicit newlines first."""
+    result: List[str] = []
+    for paragraph in (line.strip() for line in text.splitlines()):
+        if not paragraph:
+            continue
+        if cjk:
+            result.extend(
+                paragraph[index : index + limit]
+                for index in range(0, len(paragraph), limit)
+            )
+            continue
+
+        current = ""
+        for word in paragraph.split():
+            if len(word) > limit:
+                if current:
+                    result.append(current)
+                    current = ""
+                result.extend(
+                    word[index : index + limit]
+                    for index in range(0, len(word), limit)
+                )
+                continue
+            candidate = f"{current} {word}".strip()
+            if current and len(candidate) > limit:
+                result.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            result.append(current)
+    return result or ([text] if text else [])
+
+
+def _fit_text_lines(
+    text: str,
+    width: int,
+    style: RoundedBgStyle,
+    max_lines: int,
+) -> Tuple[FontType, List[str]]:
+    """Fit text into at most ``max_lines`` while preserving every character."""
+    font_name = _font_name_for_text(text, style)
+    cjk = is_mainly_cjk(text)
+    char_limit = style.max_chars_cjk if cjk else style.max_chars_english
+    min_size = max(24, int(style.font_size * 0.65))
+    last_font = get_font(style.font_size, font_name, style.font_weight)
+    last_lines: List[str] = []
+
+    for size in range(style.font_size, min_size - 1, -2):
+        font = get_font(size, font_name, style.font_weight)
+        candidate_lines: List[str] = []
+        for chunk in _split_by_character_limit(text, char_limit, cjk):
+            candidate_lines.extend(
+                wrap_text(
+                    chunk,
+                    font,
+                    width,
+                    style.padding_h,
+                    extra_margin=int(width * 0.1),
+                    spacing=style.letter_spacing,
+                )
+            )
+        last_font, last_lines = font, candidate_lines
+        if len(candidate_lines) <= max_lines:
+            return font, candidate_lines
+
+    # Extremely long externally supplied cues cannot be split in time here.
+    # Preserve their full text and keep the visual contract at two lines.
+    if len(last_lines) > max_lines:
+        separator = "" if cjk else " "
+        last_lines = last_lines[: max_lines - 1] + [
+            separator.join(last_lines[max_lines - 1 :])
+        ]
+    return last_font, last_lines
 
 
 def _get_video_info(video_path: str) -> Tuple[int, int, float]:
@@ -77,6 +172,8 @@ def render_text_block(
 
     bg_color = hex_to_rgba(style.bg_color)
     text_color = hex_to_rgba(style.text_color)
+    outline_color = hex_to_rgba(style.outline_color)
+    shadow_color = hex_to_rgba(style.shadow_color)
 
     # 计算All行的尺寸和垂直偏移
     line_sizes = []
@@ -87,12 +184,21 @@ def render_text_block(
         # 如果有字符间距，需要加上额外的宽度
         if style.letter_spacing > 0 and len(text) > 1:
             text_width += style.letter_spacing * (len(text) - 1)
-        line_sizes.append((text_width, bbox[3] - bbox[1]))
+        line_sizes.append(
+            (
+                text_width + style.outline_width * 2,
+                bbox[3] - bbox[1] + style.outline_width * 2,
+            )
+        )
         line_offsets.append(bbox[1])  # 记录垂直偏移，用于居中对齐
 
     max_width = max(w for w, h in line_sizes)
     line_height = max(h for w, h in line_sizes)
-    total_height = line_height * len(texts) + style.line_spacing * (len(texts) - 1)
+    line_step = max(
+        line_height + style.line_spacing,
+        int(round(line_height * style.line_height_ratio)),
+    )
+    total_height = line_height + line_step * (len(texts) - 1)
 
     # 绘制共享背景
     bg_width = max_width + style.padding_h * 2
@@ -115,17 +221,39 @@ def render_text_block(
         text_y = y - y_offset  # 补偿垂直偏移，使文本视觉居中
 
         # 如果有字符间距，逐字符绘制
+        def draw_character(position, value):
+            shadow_position = (
+                position[0] + style.shadow_offset_x,
+                position[1] + style.shadow_offset_y,
+            )
+            draw.text(
+                shadow_position,
+                value,
+                font=font,
+                fill=shadow_color,
+                stroke_width=style.outline_width,
+                stroke_fill=shadow_color,
+            )
+            draw.text(
+                position,
+                value,
+                font=font,
+                fill=text_color,
+                stroke_width=style.outline_width,
+                stroke_fill=outline_color,
+            )
+
         if style.letter_spacing > 0 and len(text) > 1:
             current_x = x
             for char in text:
-                draw.text((current_x, text_y), char, font=font, fill=text_color)
+                draw_character((current_x, text_y), char)
                 char_width = font.getbbox(char)[2] - font.getbbox(char)[0]
                 current_x += char_width + style.letter_spacing
         else:
             # 无字符间距，一次性绘制（性能更好）
-            draw.text((x, text_y), text, font=font, fill=text_color)
+            draw_character((x, text_y), text)
 
-        y += line_height + style.line_spacing
+        y += line_step
 
     return bg_height
 
@@ -152,33 +280,37 @@ def render_subtitle_image(
     """
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    font = get_font(style.font_size, style.font_name)
 
-    # 换行处理（额外留 40px 边距防止文字贴边）
-    extra_margin = int(width * 0.1)
-    primary_lines = (
-        wrap_text(primary_text, font, width, style.padding_h, extra_margin=extra_margin)
+    # One language may occupy two lines; bilingual subtitles use one line each.
+    primary_limit = 1 if primary_text and secondary_text else style.max_lines
+    secondary_limit = 1 if primary_text and secondary_text else style.max_lines
+    primary_font, primary_lines = (
+        _fit_text_lines(primary_text, width, style, primary_limit)
         if primary_text
-        else []
+        else (get_font(style.font_size, style.font_name, style.font_weight), [])
     )
-    secondary_lines = (
-        wrap_text(secondary_text, font, width, style.padding_h, extra_margin=extra_margin)
+    secondary_font, secondary_lines = (
+        _fit_text_lines(secondary_text, width, style, secondary_limit)
         if secondary_text
-        else []
+        else (primary_font, [])
     )
 
     center_x = width // 2
 
     # 计算总高度
-    def calc_block_height(lines: List[str]) -> float:
+    def calc_block_height(lines: List[str], font: FontType) -> float:
         if not lines:
             return 0
         bbox = font.getbbox("测试Ag")
-        line_h = bbox[3] - bbox[1]
-        return line_h * len(lines) + style.line_spacing * (len(lines) - 1) + style.padding_v * 2
+        line_h = bbox[3] - bbox[1] + style.outline_width * 2
+        line_step = max(
+            line_h + style.line_spacing,
+            int(round(line_h * style.line_height_ratio)),
+        )
+        return line_h + line_step * (len(lines) - 1) + style.padding_v * 2
 
-    primary_height = calc_block_height(primary_lines)
-    secondary_height = calc_block_height(secondary_lines)
+    primary_height = calc_block_height(primary_lines, primary_font)
+    secondary_height = calc_block_height(secondary_lines, secondary_font)
     gap = style.line_spacing if primary_lines and secondary_lines else 0
     total_height = primary_height + gap + secondary_height
 
@@ -189,10 +321,14 @@ def render_subtitle_image(
     # 渲染文本块
     current_y = start_y
     if primary_lines:
-        h = render_text_block(draw, primary_lines, font, center_x, current_y, style)
+        h = render_text_block(
+            draw, primary_lines, primary_font, center_x, current_y, style
+        )
         current_y += h + gap
     if secondary_lines:
-        render_text_block(draw, secondary_lines, font, center_x, current_y, style)
+        render_text_block(
+            draw, secondary_lines, secondary_font, center_x, current_y, style
+        )
 
     return image
 
@@ -253,6 +389,10 @@ def render_preview(
             margin_bottom=int(style.margin_bottom * scale_factor),
             line_spacing=int(style.line_spacing * scale_factor),
             letter_spacing=int(style.letter_spacing * scale_factor),
+            # Keep the protective outline at the requested physical 1 px.
+            outline_width=style.outline_width,
+            shadow_offset_x=max(1, int(round(style.shadow_offset_x * scale_factor))),
+            shadow_offset_y=max(1, int(round(style.shadow_offset_y * scale_factor))),
         )
 
     # 渲染字幕并叠加
@@ -316,6 +456,23 @@ def render_rounded_video(
 
     # 获取视频信息
     width, height, video_duration = _get_video_info(video_path)
+    final_encoding_args, source_info, max_rate = build_mac_encoding_args(
+        video_path, output_path, crf, preset
+    )
+    using_nvenc = "h264_nvenc" in final_encoding_args
+    target_rate_k = get_target_bitrate_kbps(crf)
+    logger.info(
+        "Mac-compatible encode: encoder=%s, source=%s %dx%d %.3ffps "
+        "%.2fMbps, target=%dkbps, maxrate=%.2fMbps",
+        "h264_nvenc P5 VBR" if using_nvenc else f"libx264 {preset} VBR",
+        source_info.codec,
+        source_info.width,
+        source_info.height,
+        source_info.fps,
+        source_info.bit_rate / 1_000_000,
+        target_rate_k,
+        max_rate / 1_000_000,
+    )
 
     # 构建并缩放样式
     style_config = rounded_style or {}
@@ -333,6 +490,10 @@ def render_rounded_video(
             margin_bottom=int(style.margin_bottom * scale_factor),
             line_spacing=int(style.line_spacing * scale_factor),
             letter_spacing=int(style.letter_spacing * scale_factor),
+            # Keep the protective outline at the requested physical 1 px.
+            outline_width=style.outline_width,
+            shadow_offset_x=max(1, int(round(style.shadow_offset_x * scale_factor))),
+            shadow_offset_y=max(1, int(round(style.shadow_offset_y * scale_factor))),
         )
 
     with tempfile.TemporaryDirectory(prefix="rounded_subtitle_") as temp_dir:
@@ -407,6 +568,22 @@ def render_rounded_video(
             logger.debug(f"Processing batch {batch_idx + 1}/{total_batches}（{len(batch_frames)}个字幕）")
             # 构建 ffmpeg Command
             # -t 参数强制保持原视频时长，防止因 overlay ended而截断视频
+            encoding_args = (
+                final_encoding_args
+                if is_last_batch
+                else [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-crf",
+                    "0",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "copy",
+                ]
+            )
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -419,16 +596,7 @@ def render_rounded_video(
                 "0:a?",
                 "-t",
                 str(video_duration),  # 强制保持原视频时长
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast" if not is_last_batch else preset,
-                "-crf",
-                "0" if not is_last_batch else str(crf),
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "copy",
+                *encoding_args,
                 str(batch_output),
             ]
 
@@ -446,6 +614,52 @@ def render_rounded_video(
                     getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
                 ),
             )
+
+            if result.returncode != 0 and is_last_batch and using_nvenc:
+                # This callback raises immediately when the UI requested stop,
+                # preventing a cancelled NVENC process from starting CPU retry.
+                if progress_callback:
+                    progress_callback(30, "NVENC失敗，正在切換CPU編碼")
+                logger.warning(
+                    "NVENC encoding failed (code %s); retrying final batch with libx264",
+                    result.returncode,
+                )
+                fallback_args, _, _ = build_mac_encoding_args(
+                    video_path,
+                    output_path,
+                    crf,
+                    preset,
+                    prefer_hardware=False,
+                )
+                fallback_cmd = [
+                    "ffmpeg",
+                    "-y",
+                    *input_args,
+                    "-filter_complex",
+                    filter_complex,
+                    "-map",
+                    final_output,
+                    "-map",
+                    "0:a?",
+                    "-t",
+                    str(video_duration),
+                    *fallback_args,
+                    str(batch_output),
+                ]
+                result = subprocess.run(
+                    fallback_cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=(
+                        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                        if os.name == "nt"
+                        else 0
+                    ),
+                )
+                if result.returncode == 0:
+                    logger.info("NVENC fallback completed successfully with libx264")
 
             if result.returncode != 0:
                 logger.error(f"批次 {batch_idx + 1} 失败: {result.stderr}")

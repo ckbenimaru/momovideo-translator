@@ -44,6 +44,8 @@ class FasterWhisperASR(BaseASR):
         vad_filter: bool = True,
         vad_threshold: float = 0.4,
         vad_method: str = "",  # https://github.com/Purfview/whisper-standalone-win/discussions/231
+        vad_min_silence_duration_ms: int = 350,
+        vad_speech_pad_ms: int = 200,
         # 音频处理
         ff_mdx_kim2: bool = False,
         # 文本处理参数
@@ -71,6 +73,8 @@ class FasterWhisperASR(BaseASR):
         self.vad_filter = vad_filter
         self.vad_threshold = vad_threshold
         self.vad_method = vad_method
+        self.vad_min_silence_duration_ms = vad_min_silence_duration_ms
+        self.vad_speech_pad_ms = vad_speech_pad_ms
 
         # 音频处理参数
         self.ff_mdx_kim2 = ff_mdx_kim2
@@ -93,11 +97,10 @@ class FasterWhisperASR(BaseASR):
             self.max_line_width = 90
 
         # 断句选项
-        if self.need_word_time_stamp:
-            self.one_word = 1
-        else:
-            self.one_word = 0
-            self.sentence = True
+        # Re-segmentation is performed locally from JSON word timestamps.
+        # Do not ask the executable to format final subtitle sentences.
+        self.one_word = 0
+        self.sentence = False
 
         # 根据设备选择程序
         if self.device == "cpu":
@@ -109,11 +112,15 @@ class FasterWhisperASR(BaseASR):
                 self.faster_whisper_program = "faster-whisper"
                 self.vad_method = ""
         elif self.device == "cuda":
-            if not shutil.which("faster-whisper-xxl"):
+            program_path = shutil.which("faster-whisper-xxl")
+            configured_path = Path(str(self.faster_whisper_program))
+            if not program_path and configured_path.is_file():
+                program_path = str(configured_path)
+            if not program_path:
                 raise EnvironmentError(
                     "faster-whisper-xxl 程序未找到，请确保已经下载。"
                 )
-            self.faster_whisper_program = "faster-whisper-xxl"
+            self.faster_whisper_program = program_path
 
     def _build_command(self, audio_input: str) -> List[str]:
         """Build command line arguments for faster-whisper."""
@@ -130,7 +137,17 @@ class FasterWhisperASR(BaseASR):
         if self.model_dir:
             cmd.extend(["--model_dir", str(self.model_dir)])
 
-        cmd.extend([str(audio_input), "-d", self.device, "--output_format", self.output_format])
+        cmd.extend(
+            [
+                str(audio_input),
+                "-d",
+                self.device,
+                "--output_format",
+                "json",
+                "--word_timestamps",
+                "true",
+            ]
+        )
 
         # 有指定语言才传 -l，空字符串让 faster-whisper 自动检测
         if self.language:
@@ -150,6 +167,10 @@ class FasterWhisperASR(BaseASR):
                     "true",
                     "--vad_threshold",
                     f"{self.vad_threshold:.2f}",
+                    "--vad_min_silence_duration_ms",
+                    str(self.vad_min_silence_duration_ms),
+                    "--vad_speech_pad_ms",
+                    str(self.vad_speech_pad_ms),
                 ]
             )
             if self.vad_method:
@@ -158,7 +179,7 @@ class FasterWhisperASR(BaseASR):
             cmd.extend(["--vad_filter", "false"])
 
         # 人声分离
-        if self.ff_mdx_kim2 and self.faster_whisper_program.startswith(
+        if self.ff_mdx_kim2 and Path(self.faster_whisper_program).stem.lower().startswith(
             "faster-whisper-xxl"
         ):
             cmd.append("--ff_mdx_kim2")
@@ -200,7 +221,15 @@ class FasterWhisperASR(BaseASR):
         return cmd
 
     def _make_segments(self, resp_data: str) -> List[ASRDataSeg]:
-        asr_data = ASRData.from_srt(resp_data)
+        # Local import avoids the asr package's eager __init__ imports forming
+        # a cycle with the standalone subtitle module.
+        from ..subtitle.resegment import parse_faster_whisper_json
+
+        try:
+            asr_data = ASRData(parse_faster_whisper_json(resp_data))
+        except (ValueError, TypeError):
+            # Backward-compatible fallback for old cached SRT responses.
+            asr_data = ASRData.from_srt(resp_data)
 
         # 幻觉文本关键词列表
         hallucination_keywords = [
@@ -236,7 +265,7 @@ class FasterWhisperASR(BaseASR):
         with tempfile.TemporaryDirectory() as temp_path:
             temp_dir = Path(temp_path)
             wav_path = temp_dir / "audio.wav"
-            output_path = wav_path.with_suffix(".srt")
+            output_path = wav_path.with_suffix(".json")
 
             if isinstance(self.audio_input, str):
                 shutil.copy2(self.audio_input, wav_path)

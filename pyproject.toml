@@ -44,9 +44,9 @@ dependencies = [
 gui = []
 
 [project.urls]
-Homepage = "https://github.com/WEIFENG2333/VideoCaptioner"
-Repository = "https://github.com/WEIFENG2333/VideoCaptioner"
-Issues = "https://github.com/WEIFENG2333/VideoCaptioner/issues"
+Homepage = "https://github.com/ckbenimaru/momovideo-translator"
+Repository = "https://github.com/ckbenimaru/momovideo-translator"
+Issues = "https://github.com/ckbenimaru/momovideo-translator/issues"
 
 [project.scripts]
 videocaptioner = "videocaptioner.cli.main:main"

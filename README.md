@@ -1,146 +1,107 @@
-<div align="center">
-  <img src="./docs/images/logo.png" alt="VideoCaptioner Logo" width="100">
-  <h1>VideoCaptioner</h1>
-  <p>基于大语言模型的视频字幕处理工具 — 语音识别、字幕优化、翻译、视频合成一站式处理</p>
+# momo 字幕助手
 
-  [在线文档](https://weifeng2333.github.io/VideoCaptioner/) · [CLI 使用](#cli-命令行) · [GUI 桌面版](#gui-桌面版) · [Claude Code Skill](#claude-code-skill)
-</div>
+以 [VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner) 為基礎修改的本地影片轉錄、字幕翻譯及影片合成工具。
 
-## 安装
+本倉庫只保存核心原始碼及必要字型，不包含 Python 執行環境、FFmpeg、Faster-Whisper-XXL 程式、CUDA 元件或語音模型。這些大型元件由使用者按需要自行安裝或在軟體內下載。
 
-```bash
-pip install videocaptioner          # 安装 CLI + GUI 桌面版
+## 主要改動
+
+- 支援 Faster-Whisper-XXL 與 `large-v3-turbo` 本地語音轉錄，語音不需上傳第三方平台。
+- 啟用詞級時間戳與 VAD，並按標點、停頓、時長、字數及閱讀速度重新切分字幕。
+- 建立任務後自動完成語音轉錄及字幕優化／翻譯，影片合成改為使用者手動啟動。
+- 合成期間可停止任務；輸出名稱採用 `原檔名.done.mp4`。
+- 影片輸出為 MP4、H.264/AVC、AAC、`yuv420p` 並加入 Fast Start，方便 macOS 播放。
+- NVIDIA 顯示卡優先使用 NVENC，失敗時自動回退至 `libx264`。
+- 影片品質預設碼率：極高 8 Mbps、高 5 Mbps、中 3 Mbps、低 1.5 Mbps。
+- 內置 momo／YouTube-style Modern Subtitle 字幕樣式及 Noto Sans 字型。
+
+## 系統需求
+
+- Windows 10／11 64 位元
+- Python 3.10、3.11 或 3.12
+- Git
+- FFmpeg（需要可從命令列執行 `ffmpeg` 與 `ffprobe`）
+- 建議使用 NVIDIA 顯示卡及近期驅動；沒有 NVIDIA 顯示卡時可使用 CPU／`libx264`
+
+目前 Faster-Whisper-XXL CUDA 流程主要針對 Windows。輸出的 H.264／AAC MP4 影片可在 macOS 使用，但這不代表本專案已提供完整的 macOS 語音轉錄環境。
+
+## 從原始碼安裝
+
+建議先安裝 [uv](https://docs.astral.sh/uv/)，然後執行：
+
+```powershell
+git clone https://github.com/ckbenimaru/momovideo-translator.git
+cd momovideo-translator
+uv sync
+uv run videocaptioner
 ```
 
-免费功能（必剪语音识别、必应/谷歌翻译）**无需任何配置，安装即用**。
+也可以明確啟動圖形介面：
 
-## CLI 命令行
-
-```bash
-# 语音转录（免费，无需 API Key）
-videocaptioner transcribe video.mp4 --asr bijian
-
-# 字幕翻译（免费必应翻译）
-videocaptioner subtitle input.srt --translator bing --target-language en
-
-# 全流程：转录 → 优化 → 翻译 → 合成
-videocaptioner process video.mp4 --target-language ja
-
-# 字幕烧录到视频
-videocaptioner synthesize video.mp4 -s subtitle.srt
-
-# 下载在线视频
-videocaptioner download "https://youtube.com/watch?v=xxx"
+```powershell
+uv run videocaptioner-gui
 ```
 
-需要 LLM 功能（字幕优化、大模型翻译）时，配置 API Key：
+本倉庫目前是原始碼版本，不是可攜式免安裝軟體包。
 
-```bash
-videocaptioner config set llm.api_key <your-key>
-videocaptioner config set llm.api_base https://api.openai.com/v1
-videocaptioner config set llm.model gpt-4o-mini
+## Faster Whisper 與模型
+
+Faster-Whisper-XXL 執行檔及模型不會提交至 GitHub，避免倉庫體積過大。
+
+啟動軟體後，在 Faster Whisper 設定頁面：
+
+1. 下載或指定 Faster-Whisper-XXL 程式。
+2. 下載 `faster-whisper-large-v3-turbo` 模型。
+3. NVIDIA 顯示卡選擇 `cuda`；沒有相容顯示卡時選擇 `cpu`。
+4. 確認程式及模型狀態顯示已安裝後再開始任務。
+
+開發模式的預設位置：
+
+```text
+resource\bin\Faster-Whisper-XXL\faster-whisper-xxl.exe
+AppData\models\faster-whisper-large-v3-turbo\
 ```
 
-配置优先级：`命令行参数 > 环境变量 (VIDEOCAPTIONER_*) > 配置文件 > 默认值`。运行 `videocaptioner config show` 查看当前配置。
+這些目錄已由 `.gitignore` 排除，不會被意外提交。
 
-<details>
-<summary>所有 CLI 命令一览</summary>
+## 預設字幕切分
 
-| 命令 | 说明 |
-|------|------|
-| `gui` | 打开桌面版。也可以直接运行 `videocaptioner-gui` |
-| `transcribe` | 语音转字幕。引擎：`faster-whisper`、`whisper-api`、`bijian`（免费）、`jianying`（免费）、`whisper-cpp` |
-| `subtitle` | 字幕优化/翻译。翻译服务：`llm`、`bing`（免费）、`google`（免费） |
-| `dub` | 根据字幕生成配音音轨或配音视频 |
-| `synthesize` | 字幕烧录到视频（软字幕/硬字幕） |
-| `process` | 全流程处理 |
-| `download` | 下载 YouTube、B站等平台视频 |
-| `config` | 配置管理（`show`、`set`、`get`、`path`、`init`） |
+- 理想時長：3.5 秒
+- 最大時長：6 秒
+- 最短時長：0.8 秒
+- 優先停頓閾值：0.45 秒
+- VAD 最短靜音：350 ms
+- VAD 語音前後留白：200 ms
+- 最多兩行
+- 中文每行最多約 20 字，英文每行最多約 42 字
 
-运行 `videocaptioner <命令> --help` 查看完整参数。完整 CLI 文档见 [docs/cli.md](docs/cli.md)。
+以上參數可在軟體介面調整。
 
-</details>
+## 隱私說明
 
-## GUI 桌面版
+- 使用 Faster Whisper 本地轉錄時，語音檔案不會上傳至 Bilibili、Google 或其他語音平台。
+- 使用 Google 翻譯時，字幕文字仍會傳送至 Google 翻譯服務。
+- 使用其他翻譯或 LLM 服務時，字幕文字及所提供的上下文會按該服務的流程傳送。
 
-```bash
-pip install videocaptioner
-videocaptioner-gui                  # 显式打开桌面版
-videocaptioner gui                  # 等价命令
-videocaptioner                      # 无参数时也会打开桌面版
+如需完全離線處理，請同時選用本地轉錄及本地翻譯方案。
+
+## 輸出影片
+
+硬字幕合成預設使用：
+
+```text
+容器：MP4
+影像：H.264 / AVC (avc1)
+音訊：AAC (mp4a)
+像素格式：yuv420p
+Fast Start：開啟
+輸出名稱：原檔名.done.mp4
 ```
 
-<details>
-<summary>其他安装方式：Windows 安装包 / macOS 一键脚本</summary>
+## 上游及授權
 
-**Windows**：从 [Release](https://github.com/WEIFENG2333/VideoCaptioner/releases) 下载安装包
+本專案衍生自 WEIFENG2333 的 [VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner)，並保留原專案的 GPL-3.0 授權。
 
-**macOS**：
-```bash
-curl -fsSL https://raw.githubusercontent.com/WEIFENG2333/VideoCaptioner/master/scripts/run.sh | bash
-```
+本專案依照 [GNU General Public License v3.0](LICENSE) 發佈。Noto Sans 字型使用 SIL Open Font License，授權文件位於 `videocaptioner/resources/fonts/`。
 
-</details>
-
-
-<!-- <div align="center">
-  <img src="https://h1.appinn.me/file/1731487405884_main.png" alt="界面预览" width="90%" style="border-radius: 5px;">
-</div> -->
-
-![页面预览](https://h1.appinn.me/file/1731487410170_preview1.png)
-![页面预览](https://h1.appinn.me/file/1731487410832_preview2.png)
-
-## LLM API 配置
-
-LLM 仅用于字幕优化和大模型翻译，免费功能（必剪识别、必应翻译）无需配置。
-
-支持所有 OpenAI 兼容接口的服务商：
-
-| 服务商 | 官网 |
-|--------|------|
-| **VideoCaptioner 中转站** | [api.videocaptioner.cn](https://api.videocaptioner.cn) — 高并发，性价比高，支持 GPT/Claude/Gemini 等 |
-| SiliconCloud | [cloud.siliconflow.cn](https://cloud.siliconflow.cn/i/HF95kaoz) |
-| DeepSeek | [platform.deepseek.com](https://platform.deepseek.com) |
-
-在软件设置或 CLI 中填入 API Base URL 和 API Key 即可。[详细配置教程](https://weifeng2333.github.io/VideoCaptioner/config/llm)
-
-## Claude Code Skill
-
-本项目提供了 [Claude Code Skill](https://code.claude.com/docs/en/skills.md)，让 AI 编程助手可以直接调用 VideoCaptioner 处理视频。
-
-安装到 Claude Code：
-
-```bash
-mkdir -p ~/.claude/skills/videocaptioner
-cp skills/SKILL.md ~/.claude/skills/videocaptioner/SKILL.md
-```
-
-然后在 Claude Code 中输入 `/videocaptioner transcribe video.mp4 --asr bijian` 即可使用。
-
-## 工作原理
-
-```
-音视频输入 → 语音识别 → 字幕断句 → LLM 优化 → 翻译 → 视频合成
-```
-
-- 词级时间戳 + VAD 语音活动检测，识别准确率高
-- LLM 语义理解断句，字幕阅读体验自然流畅
-- 上下文感知翻译，支持反思优化机制
-- 批量并发处理，效率高
-
-## 开发
-
-```bash
-git clone https://github.com/WEIFENG2333/VideoCaptioner.git
-cd VideoCaptioner
-uv sync && uv run videocaptioner     # 运行 GUI
-uv run videocaptioner --help          # 运行 CLI
-uv run pyright                        # 类型检查
-uv run pytest tests/test_cli/ -q      # 运行测试
-```
-
-## 许可证
-
-[GPL-3.0](LICENSE)
-
-[![Star History Chart](https://api.star-history.com/svg?repos=WEIFENG2333/VideoCaptioner&type=Date)](https://star-history.com/#WEIFENG2333/VideoCaptioner&Date)
+如要回報此修改版問題，請使用本倉庫的 [Issues](https://github.com/ckbenimaru/momovideo-translator/issues)。上游原始功能問題可先參考原專案文件及 Issues。

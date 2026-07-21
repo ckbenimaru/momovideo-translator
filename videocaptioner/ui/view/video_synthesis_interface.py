@@ -260,9 +260,7 @@ class VideoSynthesisInterface(QWidget):
         self.video_button.clicked.connect(self.choose_video_file)
 
         # 合成和文件夹相关信号
-        self.synthesize_button.clicked.connect(
-            lambda: self.start_video_synthesis(need_create_task=True)
-        )
+        self.synthesize_button.clicked.connect(self.on_synthesis_button_clicked)
 
         # 全局 signalBus
         signalBus.soft_subtitle_changed.connect(self.on_soft_subtitle_changed)
@@ -468,13 +466,25 @@ class VideoSynthesisInterface(QWidget):
         self.task = task
         self.update_info()
 
+    def prepare_manual_synthesis(self):
+        """Prepare step four without starting it automatically."""
+        self.progress_bar.reset()
+        self.status_label.setText(self.tr("前三步已完成，等待手动合成"))
+        self._set_synthesis_running(False)
+        InfoBar.info(
+            self.tr("等待手动合成"),
+            self.tr("语音转录和字幕优化翻译已完成，请确认设置后点击“开始合成”"),
+            duration=INFOBAR_DURATION_SUCCESS,
+            position=InfoBarPosition.TOP,
+            parent=self,
+        )
+
     def update_info(self):
         if self.task:
             self.video_input.setText(self.task.video_path)
             self.subtitle_input.setText(self.task.subtitle_path)
 
     def start_video_synthesis(self, need_create_task=True):
-        self.synthesize_button.setEnabled(False)
         self.progress_bar.resume()
         self.progress_bar.reset()
         if need_create_task:
@@ -489,17 +499,48 @@ class VideoSynthesisInterface(QWidget):
                 self.on_video_synthesis_progress
             )
             self.video_synthesis_thread.error.connect(self.on_video_synthesis_error)
+            self.video_synthesis_thread.cancelled.connect(
+                self.on_video_synthesis_cancelled
+            )
+            self._set_synthesis_running(True)
             self.video_synthesis_thread.start()
         else:
-            self.synthesize_button.setEnabled(True)
+            self._set_synthesis_running(False)
+
+    def on_synthesis_button_clicked(self):
+        thread = getattr(self, "video_synthesis_thread", None)
+        if thread is not None and thread.isRunning():
+            self.stop_video_synthesis()
+        else:
+            self.start_video_synthesis(need_create_task=True)
+
+    def stop_video_synthesis(self):
+        thread = getattr(self, "video_synthesis_thread", None)
+        if thread is None or not thread.isRunning():
+            return
+        self.synthesize_button.setEnabled(False)
+        self.synthesize_button.setText(self.tr("正在停止…"))
+        self.status_label.setText(self.tr("正在停止合成…"))
+        thread.stop()
+
+    def _set_synthesis_running(self, running: bool):
+        self.synthesize_button.setEnabled(True)
+        self.synthesize_button.setText(
+            self.tr("停止合成") if running else self.tr("开始合成")
+        )
+        self.subtitle_input.setEnabled(not running)
+        self.video_input.setEnabled(not running)
+        self.subtitle_button.setEnabled(not running)
+        self.video_button.setEnabled(not running)
+        self.command_bar.setEnabled(not running)
 
     def process(self):
         self.start_video_synthesis(need_create_task=False)
 
     def on_video_synthesis_finished(self, task):
-        self.synthesize_button.setEnabled(True)
+        self._set_synthesis_running(False)
         self.progress_bar.setValue(100)
-        self.open_video_folder()
+        self.status_label.setText(self.tr("合成完成"))
         InfoBar.success(
             self.tr("成功"),
             self.tr("视频合成已完成"),
@@ -513,12 +554,26 @@ class VideoSynthesisInterface(QWidget):
         self.status_label.setText(message)
 
     def on_video_synthesis_error(self, error):
-        self.synthesize_button.setEnabled(True)
+        self._set_synthesis_running(False)
         self.progress_bar.error()
+        self.status_label.setText(self.tr("合成失败"))
         InfoBar.error(
             self.tr("错误"),
             str(error),
             duration=INFOBAR_DURATION_ERROR,
+            position=InfoBarPosition.TOP,
+            parent=self,
+        )
+
+    def on_video_synthesis_cancelled(self):
+        self._set_synthesis_running(False)
+        self.progress_bar.pause()
+        self.progress_bar.reset()
+        self.status_label.setText(self.tr("已停止"))
+        InfoBar.warning(
+            self.tr("已停止"),
+            self.tr("视频合成已由用户终止，未完成的视频文件已删除"),
+            duration=INFOBAR_DURATION_WARNING,
             position=InfoBarPosition.TOP,
             parent=self,
         )

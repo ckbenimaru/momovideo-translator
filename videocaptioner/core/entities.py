@@ -21,6 +21,8 @@ class SubtitleProcessData:
     original_text: str
     translated_text: str = ""
     optimized_text: str = ""
+    previous_context: str = ""
+    next_context: str = ""
 
 
 class SupportedAudioFormats(Enum):
@@ -175,6 +177,16 @@ class VideoQualityEnum(Enum):
     HIGH = "高质量"
     MEDIUM = "中等质量"
     LOW = "低质量"
+
+    def get_bitrate_kbps(self) -> int:
+        """Return the target H.264 video bitrate for this quality tier."""
+        bitrate_map = {
+            VideoQualityEnum.ULTRA_HIGH: 8000,
+            VideoQualityEnum.HIGH: 5000,
+            VideoQualityEnum.MEDIUM: 3000,
+            VideoQualityEnum.LOW: 1500,
+        }
+        return bitrate_map[self]
 
     def get_crf(self) -> int:
         """获取对应的 CRF 值（越小质量越高，文件越大）"""
@@ -570,9 +582,19 @@ class TranscribeConfig:
     faster_whisper_vad_filter: bool = True
     faster_whisper_vad_threshold: float = 0.5
     faster_whisper_vad_method: Optional[VadMethodEnum] = VadMethodEnum.SILERO_V3
+    faster_whisper_vad_min_silence_duration_ms: int = 350
+    faster_whisper_vad_speech_pad_ms: int = 200
     faster_whisper_ff_mdx_kim2: bool = False
     faster_whisper_one_word: bool = True
     faster_whisper_prompt: Optional[str] = None
+    ideal_duration: float = 3.5
+    max_duration: float = 6.0
+    min_duration: float = 0.8
+    pause_threshold: float = 0.45
+    max_chars_per_line: int = 0
+    max_lines: int = 2
+    max_chars_per_subtitle: int = 0
+    max_chars_per_second: float = 0.0
 
     def _mask_key(self, key: Optional[str]) -> str:
         """Mask sensitive key for display"""
@@ -611,6 +633,10 @@ class TranscribeConfig:
                 )
                 lines.append(f"VAD Threshold: {self.faster_whisper_vad_threshold}")
             lines.append(f"One Word Per Segment: {self.faster_whisper_one_word}")
+            lines.append(
+                f"Re-segmentation: ideal={self.ideal_duration}s, max={self.max_duration}s, "
+                f"min={self.min_duration}s, pause={self.pause_threshold}s"
+            )
 
         elif self.transcribe_model == TranscribeModelEnum.WHISPER_CPP:
             lines.append(
@@ -642,6 +668,14 @@ class SubtitleConfig:
     max_word_count_cjk: int = 12
     max_word_count_english: int = 18
     need_split: bool = True
+    ideal_duration: float = 3.5
+    max_duration: float = 6.0
+    min_duration: float = 0.8
+    pause_threshold: float = 0.45
+    max_chars_per_line: int = 0
+    max_lines: int = 2
+    max_chars_per_subtitle: int = 0
+    max_chars_per_second: float = 0.0
     target_language: Optional["TargetLanguage"] = None
     subtitle_style: Optional[str] = None
     custom_prompt_text: Optional[str] = None
@@ -712,7 +746,9 @@ class SynthesisConfig:
             if not self.soft_subtitle:
                 lines.append(f"Render Mode: {self.render_mode.value}")
             lines.append(f"Video Quality: {self.video_quality.value}")
-            lines.append(f"  CRF: {self.video_quality.get_crf()}")
+            lines.append(
+                f"  Target Video Bitrate: {self.video_quality.get_bitrate_kbps()} kbps"
+            )
             lines.append(f"  Preset: {self.video_quality.get_preset()}")
         lines.append("=" * 44)
         return "\n".join(lines)

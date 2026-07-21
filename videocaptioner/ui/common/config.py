@@ -203,6 +203,38 @@ class Config(QConfig):
         OptionsValidator(VadMethodEnum),
         EnumSerializer(VadMethodEnum),
     )
+    faster_whisper_vad_min_silence_duration_ms = ConfigItem(
+        "FasterWhisper", "VadMinSilenceDurationMs", 350, RangeValidator(100, 2000)
+    )
+    faster_whisper_vad_speech_pad_ms = ConfigItem(
+        "FasterWhisper", "VadSpeechPadMs", 200, RangeValidator(0, 1000)
+    )
+    # Word-timestamp subtitle re-segmentation. A zero character/rate limit
+    # selects language-aware defaults (CJK 20/36/12, English 42/76/20).
+    subtitle_ideal_duration = RangeConfigItem(
+        "FasterWhisper", "IdealDuration", 3.5, RangeValidator(2.0, 5.0)
+    )
+    subtitle_max_duration = RangeConfigItem(
+        "FasterWhisper", "MaxDuration", 6.0, RangeValidator(2.0, 10.0)
+    )
+    subtitle_min_duration = RangeConfigItem(
+        "FasterWhisper", "MinDuration", 0.8, RangeValidator(0.2, 2.0)
+    )
+    subtitle_pause_threshold = RangeConfigItem(
+        "FasterWhisper", "PauseThreshold", 0.45, RangeValidator(0.1, 2.0)
+    )
+    subtitle_max_chars_per_line = ConfigItem(
+        "FasterWhisper", "MaxCharsPerLine", 0, RangeValidator(0, 120)
+    )
+    subtitle_max_lines = ConfigItem(
+        "FasterWhisper", "MaxLines", 2, RangeValidator(1, 4)
+    )
+    subtitle_max_chars_per_subtitle = ConfigItem(
+        "FasterWhisper", "MaxCharsPerSubtitle", 0, RangeValidator(0, 240)
+    )
+    subtitle_max_chars_per_second = RangeConfigItem(
+        "FasterWhisper", "MaxCharsPerSecond", 0.0, RangeValidator(0.0, 60.0)
+    )
     # 人声提取
     faster_whisper_ff_mdx_kim2 = ConfigItem(
         "FasterWhisper", "FfMdxKim2", False, BoolValidator()
@@ -249,10 +281,12 @@ class Config(QConfig):
         OptionsValidator(VideoQualityEnum),
         EnumSerializer(VideoQualityEnum),
     )
-    use_subtitle_style = ConfigItem("Video", "UseSubtitleStyle", False, BoolValidator())
+    use_subtitle_style = ConfigItem("Video", "UseSubtitleStyle", True, BoolValidator())
 
     # ------------------- 字幕样式配置 -------------------
-    subtitle_style_name = ConfigItem("SubtitleStyle", "StyleName", "default")
+    subtitle_style_name = ConfigItem(
+        "SubtitleStyle", "StyleName", "youtube-modern"
+    )
     subtitle_layout = OptionsConfigItem(
         "SubtitleStyle",
         "Layout",
@@ -272,27 +306,27 @@ class Config(QConfig):
     )
 
     # 圆角背景模式配置
-    rounded_bg_font_name = ConfigItem("RoundedBgStyle", "FontName", "Noto Sans SC")
+    rounded_bg_font_name = ConfigItem("RoundedBgStyle", "FontName", "Noto Sans TC")
     rounded_bg_font_size = RangeConfigItem(
-        "RoundedBgStyle", "FontSize", 52, RangeValidator(16, 120)
+        "RoundedBgStyle", "FontSize", 42, RangeValidator(16, 120)
     )
-    # 背景色：深灰半透明 (R=25, G=25, B=25, A=200)
-    rounded_bg_color = ConfigItem("RoundedBgStyle", "BgColor", "#191919C8")
+    # YouTube Modern：黑色圆角背景，35% 不透明度 (alpha=0x59)
+    rounded_bg_color = ConfigItem("RoundedBgStyle", "BgColor", "#00000059")
     rounded_bg_text_color = ConfigItem("RoundedBgStyle", "TextColor", "#FFFFFF")
     rounded_bg_corner_radius = RangeConfigItem(
-        "RoundedBgStyle", "CornerRadius", 12, RangeValidator(0, 50)
+        "RoundedBgStyle", "CornerRadius", 14, RangeValidator(0, 50)
     )
     rounded_bg_padding_h = RangeConfigItem(
-        "RoundedBgStyle", "PaddingH", 28, RangeValidator(4, 100)
+        "RoundedBgStyle", "PaddingH", 24, RangeValidator(4, 100)
     )
     rounded_bg_padding_v = RangeConfigItem(
-        "RoundedBgStyle", "PaddingV", 14, RangeValidator(4, 50)
+        "RoundedBgStyle", "PaddingV", 12, RangeValidator(4, 50)
     )
     rounded_bg_margin_bottom = RangeConfigItem(
-        "RoundedBgStyle", "MarginBottom", 60, RangeValidator(20, 300)
+        "RoundedBgStyle", "MarginBottom", 58, RangeValidator(20, 300)
     )
     rounded_bg_line_spacing = RangeConfigItem(
-        "RoundedBgStyle", "LineSpacing", 10, RangeValidator(0, 50)
+        "RoundedBgStyle", "LineSpacing", 12, RangeValidator(0, 50)
     )
     rounded_bg_letter_spacing = RangeConfigItem(
         "RoundedBgStyle", "LetterSpacing", 0, RangeValidator(0, 20)

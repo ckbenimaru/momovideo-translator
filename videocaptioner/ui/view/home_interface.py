@@ -93,13 +93,14 @@ class HomeInterface(QWidget):
         self.pivot.setCurrentItem("SubtitleInterface")
 
     def switch_to_video_synthesis(self, video_path, subtitle_path):
-        # 继续使用同一个 task_id，流程结束后清空
+        # 第四步改为手动执行：前三步完成后只预填合成任务并切换界面，
+        # 不自动启动视频重编码。
         synthesis_task = TaskFactory.create_synthesis_task(
             video_path, subtitle_path, need_next_task=True, task_id=self._current_task_id
         )
-        self._current_task_id = None  # 流程结束
+        self._current_task_id = None
         self.video_synthesis_interface.set_task(synthesis_task)
-        self.video_synthesis_interface.process()
+        self.video_synthesis_interface.prepare_manual_synthesis()
         self.stackedWidget.setCurrentWidget(self.video_synthesis_interface)
         self.pivot.setCurrentItem("VideoSynthesisInterface")
 

@@ -48,7 +48,14 @@ class LLMTranslator(BaseTranslator):
         )
 
         # 转换为字典格式用于API调用
-        subtitle_dict = {str(data.index): data.original_text for data in subtitle_chunk}
+        subtitle_dict = {
+            str(data.index): {
+                "previous_context": data.previous_context,
+                "current_subtitle": data.original_text,
+                "next_context": data.next_context,
+            }
+            for data in subtitle_chunk
+        }
 
         # 获取提示词
         if self.is_reflect:
@@ -63,6 +70,11 @@ class LLMTranslator(BaseTranslator):
                 target_language=self.target_language,
                 custom_prompt=self.custom_prompt,
             )
+        prompt += (
+            "\nThe previous_context and next_context fields are reference only. "
+            "Translate ONLY current_subtitle. Never include, paraphrase, or return "
+            "the context text. Return one translated string for each input key."
+        )
 
         try:
             # 使用agent loop进行翻译，自动验证和修正

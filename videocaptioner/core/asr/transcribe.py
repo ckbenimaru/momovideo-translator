@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+import requests
+
 from videocaptioner.core.asr.asr_data import ASRData
 from videocaptioner.core.asr.bcut import BcutASR
 from videocaptioner.core.asr.chunked_asr import ChunkedASR
@@ -32,11 +36,41 @@ def transcribe(audio_path: str, config: TranscribeConfig, callback=None) -> ASRD
     # Create ASR instance based on model type
     asr = _create_asr_instance(audio_path, config)
 
-    # Run transcription
-    asr_data = asr.run(callback=callback)
+    # Run transcription. Bcut may reject an otherwise valid task result with
+    # HTTP 412 (commonly policy/precondition filtering). Retry the full audio
+    # once with the independent JianYing/CapCut ASR backend.
+    try:
+        asr_data = asr.run(callback=callback)
+    except requests.exceptions.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if (
+            config.transcribe_model == TranscribeModelEnum.BIJIAN
+            and status_code == 412
+        ):
+            callback(0, "B 接口返回 412，正在自动切换 J 接口重新转录")
+            fallback_config = replace(
+                config, transcribe_model=TranscribeModelEnum.JIANYING
+            )
+            fallback_asr = _create_asr_instance(audio_path, fallback_config)
+            asr_data = fallback_asr.run(callback=callback)
+        else:
+            raise
 
-    # Optimize subtitle timing if not using word timestamps
-    if not config.need_word_time_stamp:
+    if config.transcribe_model == TranscribeModelEnum.FASTER_WHISPER:
+        from videocaptioner.core.subtitle.resegment import (
+            config_from_object,
+            resegment_asr_data,
+        )
+
+        asr_data = resegment_asr_data(asr_data, config_from_object(config))
+
+    # Optimize legacy sentence-level timing. FasterWhisper timing has already
+    # been rebuilt from exact word timestamps and must not be stretched here.
+    if (
+        not config.need_word_time_stamp
+        and config.transcribe_model != TranscribeModelEnum.FASTER_WHISPER
+    ):
         asr_data.optimize_timing()
 
     return asr_data
@@ -145,6 +179,8 @@ def _create_faster_whisper_asr(audio_path: str, config: TranscribeConfig) -> Chu
             if config.faster_whisper_vad_method
             else ""
         ),
+        "vad_min_silence_duration_ms": config.faster_whisper_vad_min_silence_duration_ms,
+        "vad_speech_pad_ms": config.faster_whisper_vad_speech_pad_ms,
         "ff_mdx_kim2": config.faster_whisper_ff_mdx_kim2,
         "one_word": config.faster_whisper_one_word,
         "prompt": config.faster_whisper_prompt,

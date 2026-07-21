@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -40,7 +41,10 @@ from videocaptioner.core.entities import (
 from videocaptioner.core.utils.platform_utils import open_folder
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.components.LineEditSettingCard import LineEditSettingCard
-from videocaptioner.ui.components.SpinBoxSettingCard import DoubleSpinBoxSettingCard
+from videocaptioner.ui.components.SpinBoxSettingCard import (
+    DoubleSpinBoxSettingCard,
+    SpinBoxSettingCard,
+)
 from videocaptioner.ui.thread.file_download_thread import FileDownloadThread
 from videocaptioner.ui.thread.modelscope_download_thread import ModelscopeDownloadThread
 
@@ -141,8 +145,14 @@ def check_faster_whisper_exists() -> tuple[bool, list[str]]:
         installed_versions.append("CPU")
 
     # 检查 Faster-Whisper-XXL/faster-whisper-xxl.exe(GPU版本)
-    xxl_path = bin_path / "Faster-Whisper-XXL" / "faster-whisper-xxl.exe"
-    if xxl_path.exists():
+    xxl_candidates = [
+        bin_path / "Faster-Whisper-XXL" / "faster-whisper-xxl.exe",
+    ]
+    path_program = shutil.which("faster-whisper-xxl")
+    if path_program:
+        xxl_candidates.append(Path(path_program))
+
+    if any(path.is_file() for path in xxl_candidates):
         installed_versions.extend(["GPU", "CPU"])
     installed_versions = list(set(installed_versions))
 
@@ -783,6 +793,57 @@ class FasterWhisperSettingWidget(QWidget):
             self.vad_group,
         )
 
+        self.vad_min_silence_card = SpinBoxSettingCard(
+            cfg.faster_whisper_vad_min_silence_duration_ms,
+            FIF.PAUSE,
+            self.tr("最小靜音時間 (ms)"),
+            self.tr("靜音超過此時間才視為語音邊界"),
+            minimum=100,
+            maximum=2000,
+        )
+        self.vad_speech_pad_card = SpinBoxSettingCard(
+            cfg.faster_whisper_vad_speech_pad_ms,
+            FIF.PAUSE,
+            self.tr("語音邊界延伸 (ms)"),
+            self.tr("保留語音前後的短音，避免切掉字頭字尾"),
+            minimum=0,
+            maximum=1000,
+        )
+
+        self.resegment_group = SettingCardGroup(self.tr("字幕重新切分"), self)
+        self.ideal_duration_card = DoubleSpinBoxSettingCard(
+            cfg.subtitle_ideal_duration, FIF.CUT, self.tr("理想時長"),
+            self.tr("每條字幕的目標秒數"), 2.0, 5.0, 1, 0.1,
+        )
+        self.max_duration_card = DoubleSpinBoxSettingCard(
+            cfg.subtitle_max_duration, FIF.CUT, self.tr("最大時長"),
+            self.tr("單條字幕不得超過的秒數"), 2.0, 10.0, 1, 0.1,
+        )
+        self.min_duration_card = DoubleSpinBoxSettingCard(
+            cfg.subtitle_min_duration, FIF.CUT, self.tr("最短時長"),
+            self.tr("過短字幕會嘗試與相鄰字幕合併"), 0.2, 2.0, 1, 0.1,
+        )
+        self.pause_threshold_card = DoubleSpinBoxSettingCard(
+            cfg.subtitle_pause_threshold, FIF.PAUSE, self.tr("停頓切分門檻"),
+            self.tr("詞間停頓超過此秒數時優先切分"), 0.1, 2.0, 2, 0.05,
+        )
+        self.max_chars_line_card = SpinBoxSettingCard(
+            cfg.subtitle_max_chars_per_line, FIF.FONT, self.tr("每行最大字符"),
+            self.tr("0 = 自動：中文20／英文42"), 0, 120,
+        )
+        self.max_lines_card = SpinBoxSettingCard(
+            cfg.subtitle_max_lines, FIF.FONT, self.tr("最大行數"),
+            self.tr("單條字幕最多顯示行數"), 1, 4,
+        )
+        self.max_chars_subtitle_card = SpinBoxSettingCard(
+            cfg.subtitle_max_chars_per_subtitle, FIF.FONT, self.tr("每條最大字符"),
+            self.tr("0 = 自動：中文36／英文76"), 0, 240,
+        )
+        self.max_chars_second_card = DoubleSpinBoxSettingCard(
+            cfg.subtitle_max_chars_per_second, FIF.SPEED_HIGH, self.tr("最大閱讀速度"),
+            self.tr("0 = 自動：中文12／英文20 字符每秒"), 0.0, 60.0, 1, 0.5,
+        )
+
         # 其他设置组
         self.other_group = SettingCardGroup(self.tr("其他设置"), self)
 
@@ -824,6 +885,20 @@ class FasterWhisperSettingWidget(QWidget):
         self.vad_group.addSettingCard(self.vad_filter_card)
         self.vad_group.addSettingCard(self.vad_threshold_card)
         self.vad_group.addSettingCard(self.vad_method_card)
+        self.vad_group.addSettingCard(self.vad_min_silence_card)
+        self.vad_group.addSettingCard(self.vad_speech_pad_card)
+
+        for card in (
+            self.ideal_duration_card,
+            self.max_duration_card,
+            self.min_duration_card,
+            self.pause_threshold_card,
+            self.max_chars_line_card,
+            self.max_lines_card,
+            self.max_chars_subtitle_card,
+            self.max_chars_second_card,
+        ):
+            self.resegment_group.addSettingCard(card)
 
         # 添加其他设置的卡片
         self.other_group.addSettingCard(self.ff_mdx_kim2_card)
@@ -833,6 +908,7 @@ class FasterWhisperSettingWidget(QWidget):
         # 将所有设置组添加到容器布局
         self.containerLayout.addWidget(self.setting_group)
         self.containerLayout.addWidget(self.vad_group)
+        self.containerLayout.addWidget(self.resegment_group)
         self.containerLayout.addWidget(self.other_group)
         self.containerLayout.addStretch(1)
 
@@ -859,6 +935,8 @@ class FasterWhisperSettingWidget(QWidget):
         """VAD过滤开关状态改变时的处理"""
         self.vad_threshold_card.setEnabled(checked)
         self.vad_method_card.setEnabled(checked)
+        self.vad_min_silence_card.setEnabled(checked)
+        self.vad_speech_pad_card.setEnabled(checked)
 
     def _show_model_manager(self):
         """显示模型管理对话框"""

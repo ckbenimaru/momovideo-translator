@@ -94,7 +94,7 @@ class MainWindow(FluentWindow):
         if interface.windowTitle():
             self.setWindowTitle(interface.windowTitle())
         else:
-            self.setWindowTitle(self.tr("卡卡字幕助手 -- VideoCaptioner"))
+            self.setWindowTitle(self.tr("momo字幕助手 -- VideoCaptioner"))
         self.stackedWidget.setCurrentWidget(interface, popOut=False)
 
     def initWindow(self):
@@ -102,7 +102,7 @@ class MainWindow(FluentWindow):
         self.resize(1050, 800)
         self.setMinimumWidth(700)
         self.setWindowIcon(QIcon(str(LOGO_PATH)))
-        self.setWindowTitle(self.tr("卡卡字幕助手 -- VideoCaptioner"))
+        self.setWindowTitle(self.tr("momo字幕助手 -- VideoCaptioner"))
 
         self.setMicaEffectEnabled(cfg.get(cfg.micaEnabled))
 
@@ -124,12 +124,14 @@ class MainWindow(FluentWindow):
         w = MessageBox(
             self.tr("GitHub信息"),
             self.tr(
-                "VideoCaptioner 由本人在课余时间独立开发完成，目前托管在GitHub上，欢迎Star和Fork。项目诚然还有很多地方需要完善，遇到软件的问题或者BUG欢迎提交Issue。\n\n https://github.com/WEIFENG2333/VideoCaptioner"
+                "momo字幕助手基于开源项目 VideoCaptioner 修改，欢迎在本项目的 GitHub 提交问题。\n\n"
+                "修改版：https://github.com/ckbenimaru/momovideo-translator\n"
+                "原项目：https://github.com/WEIFENG2333/VideoCaptioner"
             ),
             self,
         )
         w.yesButton.setText(self.tr("打开 GitHub"))
-        w.cancelButton.setText(self.tr("支持作者"))
+        w.cancelButton.setText(self.tr("支持原作者"))
         if w.exec():
             QDesktopServices.openUrl(QUrl(GITHUB_REPO_URL))
         else:

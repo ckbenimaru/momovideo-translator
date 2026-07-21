@@ -12,10 +12,10 @@ YEAR = 2026
 APP_NAME = "VideoCaptioner"
 AUTHOR = "Weifeng"
 
-HELP_URL = "https://github.com/WEIFENG2333/VideoCaptioner"
-GITHUB_REPO_URL = "https://github.com/WEIFENG2333/VideoCaptioner"
-RELEASE_URL = "https://github.com/WEIFENG2333/VideoCaptioner/releases/latest"
-FEEDBACK_URL = "https://github.com/WEIFENG2333/VideoCaptioner/issues"
+HELP_URL = "https://github.com/ckbenimaru/momovideo-translator"
+GITHUB_REPO_URL = "https://github.com/ckbenimaru/momovideo-translator"
+RELEASE_URL = "https://github.com/ckbenimaru/momovideo-translator/releases/latest"
+FEEDBACK_URL = "https://github.com/ckbenimaru/momovideo-translator/issues"
 
 # Detect whether running from source tree or pip-installed
 _PACKAGE_DIR = Path(__file__).parent

@@ -21,6 +21,10 @@ from videocaptioner.core.llm.context import (
 )
 from videocaptioner.core.optimize.optimize import SubtitleOptimizer
 from videocaptioner.core.split.split import SubtitleSplitter
+from videocaptioner.core.subtitle.resegment import (
+    config_from_object,
+    resegment_translations,
+)
 from videocaptioner.core.translate.factory import TranslatorFactory
 from videocaptioner.core.translate.types import TranslatorType
 from videocaptioner.core.utils.logger import setup_logger
@@ -182,6 +186,11 @@ class SubtitleThread(QThread):
                 )
 
                 asr_data = translator.translate_subtitle(asr_data)
+                # Re-check translated cue duration, reading speed and line
+                # wrapping. Overlong text is split at punctuation, not cut.
+                asr_data = resegment_translations(
+                    asr_data, config_from_object(subtitle_config)
+                )
 
                 # 移除末尾标点符号
                 asr_data.remove_punctuation()

@@ -45,10 +45,22 @@ class BaseTranslator(ABC):
             asr_data = subtitle_data
 
             # 将ASRData转换为SubtitleProcessData列表
-            translate_data_list = [
-                SubtitleProcessData(index=i, original_text=seg.text)
-                for i, seg in enumerate(asr_data.segments, 1)
-            ]
+            translate_data_list = []
+            for i, seg in enumerate(asr_data.segments):
+                translate_data_list.append(
+                    SubtitleProcessData(
+                        index=i + 1,
+                        original_text=seg.text,
+                        previous_context=(
+                            asr_data.segments[i - 1].text if i > 0 else ""
+                        ),
+                        next_context=(
+                            asr_data.segments[i + 1].text
+                            if i + 1 < len(asr_data.segments)
+                            else ""
+                        ),
+                    )
+                )
 
             # 分批处理字幕
             chunks = self._split_chunks(translate_data_list)

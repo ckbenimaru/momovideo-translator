@@ -23,12 +23,12 @@ class StyleMode(Enum):
 class SecondaryStyle:
     """Secondary (bilingual) subtitle style for ASS mode."""
 
-    font_name: str = "Arial"
+    font_name: str = "Noto Sans TC"
     font_size: int = 30
     color: str = "#ffffff"
-    outline_color: str = "#000000"
-    outline_width: float = 2.0
-    spacing: float = 0.8
+    outline_color: str = "#20202037"
+    outline_width: float = 1.0
+    spacing: float = 0.0
 
 
 @dataclass
@@ -45,27 +45,35 @@ class SubtitleStyle:
     mode: StyleMode = StyleMode.ASS
 
     # -- Common --
-    font_name: str = "Noto Sans SC"
+    font_name: str = "Noto Sans TC"
     font_size: int = 42
 
     # -- ASS mode fields --
-    primary_color: str = "#65ff5a"
-    outline_color: str = "#000000"
-    outline_width: float = 2.0
-    bold: bool = True
-    spacing: float = 3.2
-    margin_bottom: int = 30
+    primary_color: str = "#ffffff"
+    # With ASS BorderStyle=3, libass paints the box from OutlineColour.
+    # Its alpha therefore needs to match the translucent background.
+    outline_color: str = "#20202037"
+    # ASS BorderStyle=3 draws an opaque-box style background.  A lighter
+    # 22% fill avoids the visually over-dark result produced by libass.
+    outline_width: float = 1.0
+    back_color: str = "#00000037"
+    border_style: int = 3
+    shadow: float = 0.0
+    bold: bool = False
+    spacing: float = 0.0
+    margin_horizontal: int = 20
+    margin_bottom: int = 58
     secondary: Optional[SecondaryStyle] = None
 
     # -- Rounded mode fields --
-    text_color: str = "#000000"
-    bg_color: str = "#0de3ffe5"
+    text_color: str = "#ffffff"
+    bg_color: str = "#00000059"
     corner_radius: int = 14
     padding_h: int = 24
     padding_v: int = 18
     line_spacing: int = 12
     letter_spacing: int = 1
-    margin_bottom_rounded: int = 40
+    margin_bottom_rounded: int = 58
 
     # ------------------------------------------------------------------ #
     # Conversion helpers
@@ -75,6 +83,7 @@ class SubtitleStyle:
         """Render as ASS V4+ Styles section (for FFmpeg)."""
         primary = _hex_to_ass(self.primary_color)
         outline = _hex_to_ass(self.outline_color)
+        back = _hex_to_ass(self.back_color)
         bold_flag = -1 if self.bold else 0
 
         sec = self.secondary or SecondaryStyle(
@@ -93,15 +102,17 @@ class SubtitleStyle:
         )
         default_line = (
             f"Style: Default,{self.font_name},{self.font_size},"
-            f"{primary},&H000000FF,{outline},&H00000000,"
-            f"{bold_flag},0,0,0,100,100,{self.spacing},0,1,"
-            f"{self.outline_width},0,2,10,10,{self.margin_bottom},1,\\q1"
+            f"{primary},&H000000FF,{outline},{back},"
+            f"{bold_flag},0,0,0,100,100,{self.spacing},0,{self.border_style},"
+            f"{self.outline_width},{self.shadow},2,{self.margin_horizontal},"
+            f"{self.margin_horizontal},{self.margin_bottom},1"
         )
         secondary_line = (
             f"Style: Secondary,{sec.font_name},{sec.font_size},"
-            f"{sec_color},&H000000FF,{sec_outline},&H00000000,"
-            f"{bold_flag},0,0,0,100,100,{sec.spacing},0,1,"
-            f"{sec.outline_width},0,2,10,10,{self.margin_bottom},1,\\q1"
+            f"{sec_color},&H000000FF,{sec_outline},{back},"
+            f"{bold_flag},0,0,0,100,100,{sec.spacing},0,{self.border_style},"
+            f"{sec.outline_width},{self.shadow},2,{self.margin_horizontal},"
+            f"{self.margin_horizontal},{self.margin_bottom},1"
         )
         return f"{header}\n{default_line}\n{secondary_line}"
 
@@ -132,8 +143,12 @@ class SubtitleStyle:
                 "primary_color": self.primary_color,
                 "outline_color": self.outline_color,
                 "outline_width": self.outline_width,
+                "back_color": self.back_color,
+                "border_style": self.border_style,
+                "shadow": self.shadow,
                 "bold": self.bold,
                 "spacing": self.spacing,
+                "margin_horizontal": self.margin_horizontal,
                 "margin_bottom": self.margin_bottom,
             })
             if self.secondary:
@@ -182,8 +197,12 @@ class SubtitleStyle:
             primary_color=data.get("primary_color", cls.primary_color),
             outline_color=data.get("outline_color", cls.outline_color),
             outline_width=data.get("outline_width", cls.outline_width),
+            back_color=data.get("back_color", cls.back_color),
+            border_style=data.get("border_style", cls.border_style),
+            shadow=data.get("shadow", cls.shadow),
             bold=data.get("bold", cls.bold),
             spacing=data.get("spacing", cls.spacing),
+            margin_horizontal=data.get("margin_horizontal", cls.margin_horizontal),
             margin_bottom=data.get("margin_bottom", cls.margin_bottom),
             secondary=secondary,
         )
@@ -213,6 +232,56 @@ class SubtitleStyle:
 # Module-level helpers
 # ------------------------------------------------------------------ #
 
+YOUTUBE_MODERN_NAME = "youtube-modern"
+
+
+def ensure_youtube_modern_styles(styles_dir: Optional[Path] = None) -> None:
+    """Install the built-in modern presets into the user's style selector."""
+    if styles_dir is None:
+        styles_dir = _default_styles_dir()
+    styles_dir.mkdir(parents=True, exist_ok=True)
+
+    ass_path = styles_dir / "ass-youtube-modern.json"
+    rounded_path = styles_dir / "rounded-youtube-modern.json"
+    ass_data = SubtitleStyle(
+        name=YOUTUBE_MODERN_NAME,
+        description="YouTube-style modern subtitle",
+    ).to_json_dict()
+    rounded_data = {
+        "name": YOUTUBE_MODERN_NAME,
+        "description": "YouTube-style modern subtitle",
+        "mode": "rounded",
+        "font_name": "Noto Sans TC",
+        "font_name_tc": "Noto Sans TC",
+        "font_name_sc": "Noto Sans SC",
+        "font_name_en": "Noto Sans",
+        "font_weight": 500,
+        "font_size": 42,
+        "text_color": "#FFFFFF",
+        "bg_color": "#00000059",
+        "outline_color": "#202020FF",
+        "outline_width": 1,
+        "shadow_color": "#00000040",
+        "shadow_offset_x": 1,
+        "shadow_offset_y": 2,
+        "corner_radius": 14,
+        "padding_h": 24,
+        "padding_v": 12,
+        "line_spacing": 12,
+        "line_height_ratio": 1.3,
+        "letter_spacing": 0,
+        "margin_bottom": 58,
+        "max_lines": 2,
+        "max_chars_cjk": 20,
+        "max_chars_english": 42,
+    }
+
+    for path, data in ((ass_path, ass_data), (rounded_path, rounded_data)):
+        serialized = json.dumps(data, ensure_ascii=False, indent=2)
+        if not path.exists() or path.read_text(encoding="utf-8") != serialized:
+            path.write_text(serialized, encoding="utf-8")
+
+
 def style_id_from_filename(filename: str) -> str:
     """Extract user-facing style ID from filename.
 
@@ -229,6 +298,7 @@ def list_styles(styles_dir: Optional[Path] = None) -> List[SubtitleStyle]:
     """List all available styles in the directory."""
     if styles_dir is None:
         styles_dir = _default_styles_dir()
+    ensure_youtube_modern_styles(styles_dir)
     if not styles_dir.exists():
         return []
 
@@ -265,6 +335,7 @@ def load_style(
     """
     if styles_dir is None:
         styles_dir = _default_styles_dir()
+    ensure_youtube_modern_styles(styles_dir)
     if not styles_dir.exists():
         return None
 
@@ -319,12 +390,13 @@ def _default_styles_dir() -> Path:
 
 
 def _hex_to_ass(hex_color: str) -> str:
-    """Convert #RRGGBB to ASS &H00BBGGRR format. Only used for ASS style colors."""
+    """Convert #RRGGBB[AA] to ASS &HAABBGGRR (ASS alpha is inverted)."""
     h = hex_color.lstrip("#")
     if len(h) == 8:
-        # #AARRGGBB
-        a, r, g, b = h[0:2], h[2:4], h[4:6], h[6:8]
-        return f"&H{a}{b}{g}{r}"
+        # Application colors use #RRGGBBAA, while ASS uses inverted alpha.
+        r, g, b, a = h[0:2], h[2:4], h[4:6], h[6:8]
+        ass_alpha = 255 - int(a, 16)
+        return f"&H{ass_alpha:02X}{b}{g}{r}"
     if len(h) == 6:
         r, g, b = h[0:2], h[2:4], h[4:6]
         return f"&H00{b}{g}{r}"

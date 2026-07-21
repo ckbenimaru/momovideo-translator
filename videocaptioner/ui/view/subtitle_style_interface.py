@@ -783,7 +783,11 @@ class SubtitleStyleInterface(QWidget):
         self.styleNameComboBox.comboBox.clear()
 
         # 获取匹配当前模式的 JSON 样式文件
-        from videocaptioner.core.subtitle.style_manager import style_id_from_filename
+        from videocaptioner.core.subtitle.style_manager import (
+            ensure_youtube_modern_styles,
+            style_id_from_filename,
+        )
+        ensure_youtube_modern_styles(SUBTITLE_STYLE_PATH)
         style_files = []
         for f in sorted(SUBTITLE_STYLE_PATH.glob("*.json")):
             try:
@@ -794,12 +798,15 @@ class SubtitleStyleInterface(QWidget):
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # 确保有默认样式
+        if "youtube-modern" in style_files:
+            style_files.insert(
+                0, style_files.pop(style_files.index("youtube-modern"))
+            )
+
+        # 确保有旧版默认样式，供已有自定义设置兼容
         if "default" not in style_files:
-            style_files.insert(0, "default")
+            style_files.append("default")
             self.saveStyle("default")
-        else:
-            style_files.insert(0, style_files.pop(style_files.index("default")))
 
         self.styleNameComboBox.comboBox.addItems(style_files)
 

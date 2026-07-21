@@ -14,6 +14,18 @@ FontType = Union[ImageFont.FreeTypeFont, ImageFont.ImageFont]
 
 logger = setup_logger("subtitle.font")
 
+_PACKAGE_FONTS_PATH = Path(__file__).resolve().parents[2] / "resources" / "fonts"
+
+
+def _font_directories() -> tuple[Path, ...]:
+    """Return user/development and package font locations without duplicates."""
+    directories = []
+    for path in (FONTS_PATH, _PACKAGE_FONTS_PATH):
+        resolved = path.resolve()
+        if resolved.is_dir() and resolved not in directories:
+            directories.append(resolved)
+    return tuple(directories)
+
 
 def _get_font_family_name(font_path: Path, font_index: int = 0) -> Optional[str]:
     """Extract font family name from font file (cross-platform)"""
@@ -54,8 +66,8 @@ def get_builtin_fonts() -> tuple[Dict[str, str], ...]:
     """Get built-in fonts list with actual family names"""
     builtin_fonts = []
 
-    if FONTS_PATH.exists():
-        for font_file in FONTS_PATH.glob("*.[ot]tf*"):
+    for font_directory in _font_directories():
+        for font_file in font_directory.glob("*.[ot]tf*"):
             family_name = _get_font_family_name(font_file)
             if family_name:
                 builtin_fonts.append({"name": family_name, "path": str(font_file)})
@@ -70,23 +82,52 @@ def get_builtin_fonts() -> tuple[Dict[str, str], ...]:
     return tuple(builtin_fonts)
 
 
-@lru_cache(maxsize=64)
-def get_font(size: int, font_name: str = "") -> FontType:
-    """Get font object (built-in fonts first, then system fonts)"""
+def _set_variable_weight(font: FontType, weight: int) -> FontType:
+    """Apply a weight axis when ``font`` is a variable OpenType font."""
+    try:
+        axes = font.get_variation_axes()  # type: ignore[attr-defined]
+        values = []
+        for axis in axes:
+            axis_name = axis.get("name", b"")
+            if isinstance(axis_name, bytes):
+                axis_name = axis_name.decode("utf-8", errors="ignore")
+            if str(axis_name).lower() in {"weight", "wght"}:
+                value = max(axis["minimum"], min(axis["maximum"], weight))
+            else:
+                value = axis["default"]
+            values.append(value)
+        font.set_variation_by_axes(values)  # type: ignore[attr-defined]
+    except (AttributeError, OSError, KeyError, TypeError, ValueError):
+        pass
+    return font
+
+
+@lru_cache(maxsize=96)
+def get_font(size: int, font_name: str = "", weight: int = 400) -> FontType:
+    """Get font object, preferring bundled fonts and Medium variable weight."""
     if font_name:
         builtin_fonts = get_builtin_fonts()
-        for builtin in builtin_fonts:
-            if builtin["name"] == font_name:
-                try:
-                    font = ImageFont.truetype(builtin["path"], size)
-                    logger.debug(f"Loaded built-in font: '{font_name}'")
-                    return font
-                except Exception as e:
-                    logger.warning(f"Failed to load built-in font: {e}")
-                    break
+        matching_fonts = [
+            builtin
+            for builtin in builtin_fonts
+            if builtin["name"].casefold() == font_name.casefold()
+        ]
+        if weight != 400:
+            matching_fonts.sort(
+                key=lambda item: "vf" not in Path(item["path"]).stem.casefold()
+            )
+        for builtin in matching_fonts:
+            try:
+                font = ImageFont.truetype(builtin["path"], size)
+                font = _set_variable_weight(font, weight)
+                logger.debug(f"Loaded built-in font: '{font_name}'")
+                return font
+            except Exception as e:
+                logger.warning(f"Failed to load built-in font: {e}")
 
         try:
             font = ImageFont.truetype(font_name, size)
+            font = _set_variable_weight(font, weight)
             logger.debug(f"Loaded system font: '{font_name}'")
             return font
         except (OSError, IOError):
@@ -95,6 +136,11 @@ def get_font(size: int, font_name: str = "") -> FontType:
     fallback_fonts = [f["name"] for f in get_builtin_fonts()]
     fallback_fonts.extend(
         [
+            "Noto Sans TC",
+            "Noto Sans SC",
+            "Noto Sans",
+            "Microsoft JhengHei UI",
+            "Microsoft JhengHei",
             "PingFang SC",
             "Hiragino Sans GB",
             "Microsoft YaHei",
@@ -108,6 +154,7 @@ def get_font(size: int, font_name: str = "") -> FontType:
     for fallback in fallback_fonts:
         try:
             font = ImageFont.truetype(fallback, size)
+            font = _set_variable_weight(font, weight)
             logger.debug(f"Using fallback font: '{fallback}'")
             return font
         except Exception:
@@ -133,16 +180,21 @@ def get_ass_to_pil_ratio(font_name: str) -> float:
     """
     # Find font file
     font_path = None
-    for ext in [".ttf", ".otf", ".ttc"]:
-        candidates = list(FONTS_PATH.glob(f"**/{font_name}*{ext}"))
-        if candidates:
-            font_path = candidates[0]
+    for font_directory in _font_directories():
+        for ext in [".ttf", ".otf", ".ttc"]:
+            candidates = list(font_directory.glob(f"**/{font_name}*{ext}"))
+            if candidates:
+                font_path = candidates[0]
+                break
+        if font_path:
             break
 
     if not font_path:
-        candidates = list(FONTS_PATH.glob(f"**/*{font_name}*"))
-        if candidates:
-            font_path = candidates[0]
+        for font_directory in _font_directories():
+            candidates = list(font_directory.glob(f"**/*{font_name}*"))
+            if candidates:
+                font_path = candidates[0]
+                break
 
     # Default ratio for most CJK fonts
     if not font_path:

@@ -24,16 +24,59 @@ class TaskFactory:
     @staticmethod
     def get_ass_style(style_name: str) -> str:
         """获取 ASS 字幕样式内容 (via style_manager, JSON-first with .txt fallback)"""
-        from videocaptioner.core.subtitle.style_manager import load_style
+        from videocaptioner.core.subtitle.style_manager import SubtitleStyle, load_style
 
-        style = load_style(style_name)
+        style = (
+            SubtitleStyle(name="youtube-modern")
+            if style_name in {"default", "youtube-modern"}
+            else load_style(style_name)
+        )
         if style is not None:
+            # Older portable builds could persist an 8 px, zero-outline preset.
+            # It is technically rendered by FFmpeg but is effectively invisible
+            # on 720p/1080p video. Repair only clearly unusable presets so normal
+            # user-defined styles remain untouched.
+            if style.font_size < 18:
+                style.font_size = 42
+                style.outline_width = max(style.outline_width, 2.0)
+                style.margin_bottom = max(style.margin_bottom, 30)
+                if style.secondary is not None:
+                    style.secondary.font_size = 30
+                    style.secondary.outline_width = max(
+                        style.secondary.outline_width, 2.0
+                    )
             return style.to_ass_string()
         return ""
 
     @staticmethod
     def get_rounded_style() -> dict:
-        """获取圆角背景样式配置 (from UI cfg overrides)"""
+        """Return the YouTube-modern default or the selected custom style."""
+        if cfg.subtitle_style_name.value in {"default", "youtube-modern"}:
+            return {
+                "font_name": "Noto Sans TC",
+                "font_name_tc": "Noto Sans TC",
+                "font_name_sc": "Noto Sans SC",
+                "font_name_en": "Noto Sans",
+                "font_weight": 500,
+                "font_size": 42,
+                "bg_color": "#00000059",
+                "text_color": "#FFFFFF",
+                "outline_color": "#202020FF",
+                "outline_width": 1,
+                "shadow_color": "#00000040",
+                "shadow_offset_x": 1,
+                "shadow_offset_y": 2,
+                "corner_radius": 14,
+                "padding_h": 24,
+                "padding_v": 12,
+                "margin_bottom": 58,
+                "line_spacing": 12,
+                "line_height_ratio": 1.3,
+                "letter_spacing": 0,
+                "max_lines": 2,
+                "max_chars_cjk": 20,
+                "max_chars_english": 42,
+            }
         return {
             "font_name": cfg.rounded_bg_font_name.value,
             "font_size": cfg.rounded_bg_font_size.value,
@@ -85,14 +128,24 @@ class TaskFactory:
             # Faster Whisper 配置
             faster_whisper_program=cfg.faster_whisper_program.value,
             faster_whisper_model=cfg.faster_whisper_model.value,
-            faster_whisper_model_dir=str(MODEL_PATH),
+            faster_whisper_model_dir=cfg.faster_whisper_model_dir.value or str(MODEL_PATH),
             faster_whisper_device=cfg.faster_whisper_device.value,
             faster_whisper_vad_filter=cfg.faster_whisper_vad_filter.value,
             faster_whisper_vad_threshold=cfg.faster_whisper_vad_threshold.value,
             faster_whisper_vad_method=cfg.faster_whisper_vad_method.value,
+            faster_whisper_vad_min_silence_duration_ms=cfg.faster_whisper_vad_min_silence_duration_ms.value,
+            faster_whisper_vad_speech_pad_ms=cfg.faster_whisper_vad_speech_pad_ms.value,
             faster_whisper_ff_mdx_kim2=cfg.faster_whisper_ff_mdx_kim2.value,
             faster_whisper_one_word=cfg.faster_whisper_one_word.value,
             faster_whisper_prompt=cfg.faster_whisper_prompt.value,
+            ideal_duration=cfg.subtitle_ideal_duration.value,
+            max_duration=cfg.subtitle_max_duration.value,
+            min_duration=cfg.subtitle_min_duration.value,
+            pause_threshold=cfg.subtitle_pause_threshold.value,
+            max_chars_per_line=cfg.subtitle_max_chars_per_line.value,
+            max_lines=cfg.subtitle_max_lines.value,
+            max_chars_per_subtitle=cfg.subtitle_max_chars_per_subtitle.value,
+            max_chars_per_second=cfg.subtitle_max_chars_per_second.value,
         )
 
         task = TranscribeTask(
@@ -187,6 +240,14 @@ class TaskFactory:
             max_word_count_cjk=cfg.max_word_count_cjk.value,
             max_word_count_english=cfg.max_word_count_english.value,
             need_split=cfg.need_split.value,
+            ideal_duration=cfg.subtitle_ideal_duration.value,
+            max_duration=cfg.subtitle_max_duration.value,
+            min_duration=cfg.subtitle_min_duration.value,
+            pause_threshold=cfg.subtitle_pause_threshold.value,
+            max_chars_per_line=cfg.subtitle_max_chars_per_line.value,
+            max_lines=cfg.subtitle_max_lines.value,
+            max_chars_per_subtitle=cfg.subtitle_max_chars_per_subtitle.value,
+            max_chars_per_second=cfg.subtitle_max_chars_per_second.value,
             # 字幕翻译
             target_language=cfg.target_language.value,
             # 字幕提示
@@ -213,9 +274,8 @@ class TaskFactory:
         task_id: Optional[str] = None,
     ) -> SynthesisTask:
         """创建视频合成任务"""
-        output_path = str(
-            Path(video_path).parent / f"【卡卡】{Path(video_path).stem}.mp4"
-        )
+        video = Path(video_path)
+        output_path = str(video.parent / f"{video.stem}.done{video.suffix}")
 
         # 只有启用样式时才传入样式配置
         use_style = cfg.use_subtitle_style.value
@@ -272,7 +332,7 @@ class TaskFactory:
         if output_path is None:
             output_path = str(
                 Path(file_path).parent
-                / f"{Path(file_path).stem}_final{Path(file_path).suffix}"
+                / f"{Path(file_path).stem}.done{Path(file_path).suffix}"
             )
 
         return FullProcessTask(
