@@ -55,6 +55,7 @@ class WordTimestamp:
     text: str
     start_ms: int
     end_ms: int
+    language: str = ""
 
     def __post_init__(self):
         if self.end_ms < self.start_ms:
@@ -123,6 +124,7 @@ def resegment_asr_data(
             wrap_text(_join_words(group), cfg),
             group[0].start_ms,
             max(group[-1].end_ms, group[0].start_ms + 1),
+            language=_language_for_words(group),
         )
         for group in groups
         if group
@@ -143,7 +145,12 @@ def resegment_translations(
         translated = segment.translated_text.replace("\n", " ").strip()
         if not translated:
             result.append(
-                ASRDataSeg(wrap_text(original, cfg), segment.start_time, segment.end_time)
+                ASRDataSeg(
+                    wrap_text(original, cfg),
+                    segment.start_time,
+                    segment.end_time,
+                    language=segment.language,
+                )
             )
             continue
 
@@ -155,6 +162,7 @@ def resegment_translations(
                     segment.start_time,
                     segment.end_time,
                     wrap_text(translated, cfg),
+                    language=segment.language,
                 )
             )
             continue
@@ -175,6 +183,7 @@ def resegment_translations(
                     group[0].start_ms,
                     max(group[-1].end_ms, group[0].start_ms + 1),
                     wrap_text(_join_words(group), cfg),
+                    language=segment.language,
                 )
             )
     return ASRData(result)
@@ -211,15 +220,32 @@ def _flatten_asr_words(data: ASRData) -> List[WordTimestamp]:
     words: List[WordTimestamp] = []
     for segment in data.segments:
         if data._is_word_level_segment(segment):
-            words.append(WordTimestamp(segment.text, segment.start_time, segment.end_time))
+            words.append(
+                WordTimestamp(
+                    segment.text,
+                    segment.start_time,
+                    segment.end_time,
+                    segment.language,
+                )
+            )
         else:
             words.extend(
-                _approximate_word_timings(segment.text, segment.start_time, segment.end_time)
+                _approximate_word_timings(
+                    segment.text,
+                    segment.start_time,
+                    segment.end_time,
+                    segment.language,
+                )
             )
     return sorted(words, key=lambda word: (word.start_ms, word.end_ms))
 
 
-def _approximate_word_timings(text: str, start_ms: int, end_ms: int) -> List[WordTimestamp]:
+def _approximate_word_timings(
+    text: str,
+    start_ms: int,
+    end_ms: int,
+    language: str = "",
+) -> List[WordTimestamp]:
     tokens = TOKEN_PATTERN.findall(text or "")
     if not tokens:
         return []
@@ -231,9 +257,16 @@ def _approximate_word_timings(text: str, start_ms: int, end_ms: int) -> List[Wor
     for index, (token, weight) in enumerate(zip(tokens, weights)):
         token_end = end_ms if index == len(tokens) - 1 else cursor + max(1, round(duration * weight / total))
         token_end = min(max(token_end, cursor + 1), end_ms)
-        result.append(WordTimestamp(token, cursor, token_end))
+        result.append(WordTimestamp(token, cursor, token_end, language))
         cursor = token_end
     return result
+
+
+def _language_for_words(words: Sequence[WordTimestamp]) -> str:
+    languages = list(dict.fromkeys(word.language for word in words if word.language))
+    if len(languages) == 1:
+        return languages[0]
+    return "Multilingual" if languages else ""
 
 
 def _segment_words(

@@ -7,6 +7,7 @@ from videocaptioner.core.asr.bcut import BcutASR
 from videocaptioner.core.asr.chunked_asr import ChunkedASR
 from videocaptioner.core.asr.faster_whisper import FasterWhisperASR
 from videocaptioner.core.asr.jianying import JianYingASR
+from videocaptioner.core.asr.qwen3_asr import Qwen3ASR
 from videocaptioner.core.asr.whisper_api import WhisperAPI
 from videocaptioner.core.asr.whisper_cpp import WhisperCppASR
 from videocaptioner.core.entities import TranscribeConfig, TranscribeModelEnum
@@ -57,7 +58,10 @@ def transcribe(audio_path: str, config: TranscribeConfig, callback=None) -> ASRD
         else:
             raise
 
-    if config.transcribe_model == TranscribeModelEnum.FASTER_WHISPER:
+    if config.transcribe_model in {
+        TranscribeModelEnum.FASTER_WHISPER,
+        TranscribeModelEnum.QWEN3_ASR,
+    }:
         from videocaptioner.core.subtitle.resegment import (
             config_from_object,
             resegment_asr_data,
@@ -69,7 +73,8 @@ def transcribe(audio_path: str, config: TranscribeConfig, callback=None) -> ASRD
     # been rebuilt from exact word timestamps and must not be stretched here.
     if (
         not config.need_word_time_stamp
-        and config.transcribe_model != TranscribeModelEnum.FASTER_WHISPER
+        and config.transcribe_model
+        not in {TranscribeModelEnum.FASTER_WHISPER, TranscribeModelEnum.QWEN3_ASR}
     ):
         asr_data.optimize_timing()
 
@@ -102,6 +107,9 @@ def _create_asr_instance(audio_path: str, config: TranscribeConfig) -> ChunkedAS
 
     elif model_type == TranscribeModelEnum.FASTER_WHISPER:
         return _create_faster_whisper_asr(audio_path, config)
+
+    elif model_type == TranscribeModelEnum.QWEN3_ASR:
+        return _create_qwen3_asr(audio_path, config)
 
     else:
         raise ValueError(f"Invalid transcription model: {model_type}")
@@ -191,6 +199,30 @@ def _create_faster_whisper_asr(audio_path: str, config: TranscribeConfig) -> Chu
         asr_kwargs=asr_kwargs,
         chunk_concurrency=1,  # 本地转录使用单线程
         chunk_length=60 * 20,  # 每块20分钟
+    )
+
+
+def _create_qwen3_asr(audio_path: str, config: TranscribeConfig) -> Qwen3ASR:
+    """Create the isolated Qwen3-ASR pipeline.
+
+    Qwen performs its own silence-aware chunking because its forced aligner is
+    limited to five-minute inputs and the 8 GB target GPU must load ASR and
+    aligner sequentially.
+    """
+    return Qwen3ASR(
+        audio_input=audio_path,
+        runtime_dir=config.qwen_runtime_dir or "",
+        model_dir=config.qwen_model_dir or "",
+        asr_model=(
+            config.qwen_asr_model.value
+            if config.qwen_asr_model
+            else "Qwen3-ASR-1.7B-hf"
+        ),
+        use_forced_aligner=config.qwen_use_forced_aligner,
+        language=config.transcribe_language,
+        device=config.qwen_device,
+        chunk_seconds=config.qwen_chunk_seconds,
+        use_cache=True,
     )
 
 

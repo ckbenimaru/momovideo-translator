@@ -18,6 +18,7 @@ from videocaptioner.core.utils.encoding_policy import (
 from videocaptioner.core.utils.logger import setup_logger
 
 from .font_utils import FontType, get_font
+from .geometry import calculate_subtitle_geometry, probe_display_geometry
 from .styles import RoundedBgStyle
 from .text_utils import hex_to_rgba, is_mainly_cjk, wrap_text
 
@@ -25,6 +26,40 @@ if TYPE_CHECKING:
     from videocaptioner.core.asr.asr_data import ASRData
 
 logger = setup_logger("subtitle.rounded")
+
+
+def _scale_style_for_geometry(
+    style: RoundedBgStyle,
+    width: int,
+    height: int,
+    reference_height: int = 720,
+) -> RoundedBgStyle:
+    """Scale typography by the constraining axis and margins by frame size."""
+    geometry = calculate_subtitle_geometry(
+        width,
+        height,
+        reference_width=round(reference_height * 16 / 9),
+        reference_height=reference_height,
+    )
+    scale = geometry.typography_scale
+    return replace(
+        style,
+        font_size=max(1, int(round(style.font_size * scale))),
+        corner_radius=max(1, int(round(style.corner_radius * scale))),
+        padding_h=max(1, int(round(style.padding_h * scale))),
+        padding_v=max(1, int(round(style.padding_v * scale))),
+        margin_bottom=geometry.bottom_margin,
+        line_spacing=max(1, int(round(style.line_spacing * scale))),
+        letter_spacing=max(0, int(round(style.letter_spacing * scale))),
+        # Keep the protective outline at the requested physical 1 px.
+        outline_width=style.outline_width,
+        shadow_offset_x=max(1, int(round(style.shadow_offset_x * scale))),
+        shadow_offset_y=max(1, int(round(style.shadow_offset_y * scale))),
+        max_chars_cjk=min(style.max_chars_cjk, geometry.max_chars_cjk),
+        max_chars_english=min(
+            style.max_chars_english, geometry.max_chars_english
+        ),
+    )
 
 _TRADITIONAL_HINTS = set(
     "這個們來為與說時會後裡點體臺灣國學實發現開關過還進讓從對將於長見門間"
@@ -86,7 +121,7 @@ def _fit_text_lines(
     font_name = _font_name_for_text(text, style)
     cjk = is_mainly_cjk(text)
     char_limit = style.max_chars_cjk if cjk else style.max_chars_english
-    min_size = max(24, int(style.font_size * 0.65))
+    min_size = min(style.font_size, max(12, int(style.font_size * 0.65)))
     last_font = get_font(style.font_size, font_name, style.font_weight)
     last_lines: List[str] = []
 
@@ -129,10 +164,13 @@ def _get_video_info(video_path: str) -> Tuple[int, int, float]:
         creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0),
     )
 
-    # 解析分辨率
-    width, height = 0, 0
-    if match := re.search(r"Stream.*Video:.* (\d{2,5})x(\d{2,5})", result.stderr):
-        width, height = int(match.group(1)), int(match.group(2))
+    # Prefer display dimensions so phone rotation metadata is respected.
+    try:
+        width, height = probe_display_geometry(video_path)
+    except (OSError, RuntimeError, ValueError):
+        width, height = 0, 0
+        if match := re.search(r"Stream.*Video:.* (\d{2,5})x(\d{2,5})", result.stderr):
+            width, height = int(match.group(1)), int(match.group(2))
     else:
         raise ValueError(f"Cannot get video resolution: {video_path}")
 
@@ -377,23 +415,7 @@ def render_preview(
     assert width is not None and height is not None
 
     # 从样式中获取参考高度，根据图片高度自动缩放样式
-    scale_factor = height / reference_height
-
-    if scale_factor != 1.0:
-        style = replace(
-            style,
-            font_size=int(style.font_size * scale_factor),
-            corner_radius=int(style.corner_radius * scale_factor),
-            padding_h=int(style.padding_h * scale_factor),
-            padding_v=int(style.padding_v * scale_factor),
-            margin_bottom=int(style.margin_bottom * scale_factor),
-            line_spacing=int(style.line_spacing * scale_factor),
-            letter_spacing=int(style.letter_spacing * scale_factor),
-            # Keep the protective outline at the requested physical 1 px.
-            outline_width=style.outline_width,
-            shadow_offset_x=max(1, int(round(style.shadow_offset_x * scale_factor))),
-            shadow_offset_y=max(1, int(round(style.shadow_offset_y * scale_factor))),
-        )
+    style = _scale_style_for_geometry(style, width, height, reference_height)
 
     # 渲染字幕并叠加
     subtitle_img = render_subtitle_image(primary_text, secondary_text, width, height, style)
@@ -479,22 +501,7 @@ def render_rounded_video(
     style_config["layout"] = layout
     style = RoundedBgStyle(**style_config)
 
-    scale_factor = height / reference_height
-    if scale_factor != 1.0:
-        style = replace(
-            style,
-            font_size=int(style.font_size * scale_factor),
-            corner_radius=int(style.corner_radius * scale_factor),
-            padding_h=int(style.padding_h * scale_factor),
-            padding_v=int(style.padding_v * scale_factor),
-            margin_bottom=int(style.margin_bottom * scale_factor),
-            line_spacing=int(style.line_spacing * scale_factor),
-            letter_spacing=int(style.letter_spacing * scale_factor),
-            # Keep the protective outline at the requested physical 1 px.
-            outline_width=style.outline_width,
-            shadow_offset_x=max(1, int(round(style.shadow_offset_x * scale_factor))),
-            shadow_offset_y=max(1, int(round(style.shadow_offset_y * scale_factor))),
-        )
+    style = _scale_style_for_geometry(style, width, height, reference_height)
 
     with tempfile.TemporaryDirectory(prefix="rounded_subtitle_") as temp_dir:
         temp_path = Path(temp_dir)

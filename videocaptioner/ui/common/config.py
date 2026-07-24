@@ -21,6 +21,7 @@ from qfluentwidgets import (
 from videocaptioner.config import SETTINGS_PATH, WORK_PATH
 from videocaptioner.core.entities import (
     FasterWhisperModelEnum,
+    Qwen3ASRModelEnum,
     LLMServiceEnum,
     SubtitleLayoutEnum,
     SubtitleRenderModeEnum,
@@ -181,7 +182,7 @@ class Config(QConfig):
     faster_whisper_model = OptionsConfigItem(
         "FasterWhisper",
         "Model",
-        FasterWhisperModelEnum.TINY,
+        FasterWhisperModelEnum.LARGE_V3,
         OptionsValidator(FasterWhisperModelEnum),
         EnumSerializer(FasterWhisperModelEnum),
     )
@@ -245,6 +246,26 @@ class Config(QConfig):
     )
     # 提示词
     faster_whisper_prompt = ConfigItem("FasterWhisper", "Prompt", "")
+
+    # ------------------- Qwen3-ASR 配置 -------------------
+    qwen_runtime_dir = ConfigItem("Qwen3ASR", "RuntimeDir", "")
+    qwen_model_dir = ConfigItem("Qwen3ASR", "ModelDir", "")
+    qwen_asr_model = OptionsConfigItem(
+        "Qwen3ASR",
+        "Model",
+        Qwen3ASRModelEnum.ASR_1_7B,
+        OptionsValidator(Qwen3ASRModelEnum),
+        EnumSerializer(Qwen3ASRModelEnum),
+    )
+    qwen_use_forced_aligner = ConfigItem(
+        "Qwen3ASR", "UseForcedAligner", True, BoolValidator()
+    )
+    qwen_device = OptionsConfigItem(
+        "Qwen3ASR", "Device", "cuda", OptionsValidator(["cuda", "cpu"])
+    )
+    qwen_chunk_seconds = ConfigItem(
+        "Qwen3ASR", "ChunkSeconds", 30, RangeValidator(30, 240)
+    )
 
     # ------------------- Whisper API 配置 -------------------
     whisper_api_base = ConfigItem("WhisperAPI", "WhisperApiBase", "")

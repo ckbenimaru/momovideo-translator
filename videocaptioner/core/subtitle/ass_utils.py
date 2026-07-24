@@ -249,9 +249,6 @@ def auto_wrap_ass_file(
     if video_width is None:
         video_width = ass_info.video_width
 
-    # 使用95%宽度作为最大文本宽度
-    max_text_width = int(video_width * 0.95)
-
     def process_dialogue_line(match):
         """处理每一行对话"""
         full_line = match.group(0)
@@ -263,6 +260,8 @@ def auto_wrap_ass_file(
 
         # 获取该样式对应的字体信息
         style = ass_info.get_style(style_name)
+        # Respect the orientation-safe margins written into each ASS style.
+        max_text_width = max(1, video_width - style.margin_l - style.margin_r)
         text_part = match.group(1)
 
         # 使用实际字体渲染进行换行（考虑字符间距）

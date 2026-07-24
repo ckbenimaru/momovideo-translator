@@ -126,6 +126,16 @@ FASTER_WHISPER_MODELS = [
 ]
 
 
+def get_faster_whisper_model_root() -> Path:
+    """Return the model directory used by both downloads and transcription."""
+    configured_path = str(cfg.faster_whisper_model_dir.value or "").strip()
+    return Path(configured_path).expanduser() if configured_path else Path(MODEL_PATH)
+
+
+def get_faster_whisper_model_path(model: dict) -> Path:
+    return get_faster_whisper_model_root() / model["value"]
+
+
 # 在类外添加这个工具函数
 def check_faster_whisper_exists() -> tuple[bool, list[str]]:
     """检查 faster-whisper 程序是否存在
@@ -139,6 +149,14 @@ def check_faster_whisper_exists() -> tuple[bool, list[str]]:
     """
     bin_path = Path(BIN_PATH)
     installed_versions = []
+
+    # Honour a user-selected executable outside the bundled bin directory.
+    configured_program = Path(str(cfg.faster_whisper_program.value or "")).expanduser()
+    if configured_program.is_file():
+        if "xxl" in configured_program.stem.lower():
+            installed_versions.extend(["GPU", "CPU"])
+        else:
+            installed_versions.append("CPU")
 
     # 检查 faster-whisper.exe(CPU版本)
     if (bin_path / "faster-whisper.exe").exists():
@@ -232,6 +250,12 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
         layout.addLayout(title_layout)
         layout.addSpacing(8)
+
+        model_location = BodyLabel(
+            self.tr(f"模型保存位置: {get_faster_whisper_model_root()}"), self
+        )
+        layout.addWidget(model_location)
+        layout.addSpacing(4)
 
         # 检查已安装的版本
         has_program, installed_versions = check_faster_whisper_exists()
@@ -364,9 +388,9 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         self.model_table.setItem(row, 1, size_item)
 
         # 状态 - 检查model.bin文件是否存在
-        model_path = os.path.join(MODEL_PATH, model["value"])
-        model_bin_path = os.path.join(model_path, "model.bin")
-        is_downloaded = os.path.exists(model_bin_path)
+        model_path = get_faster_whisper_model_path(model)
+        model_bin_path = model_path / "model.bin"
+        is_downloaded = model_bin_path.is_file()
 
         status_item = QTableWidgetItem(
             self.tr("已下载") if is_downloaded else self.tr("未下载")
@@ -536,17 +560,23 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
             download_btn.setEnabled(False)
 
         # 创建并启动下载线程，保存到类属性
+        huggingface_repo = model["downloadLink"].removeprefix(
+            "https://huggingface.co/"
+        )
         self.model_download_thread = ModelscopeDownloadThread(
-            model["modelScopeLink"], os.path.join(MODEL_PATH, model["value"])
+            model["modelScopeLink"],
+            str(get_faster_whisper_model_path(model)),
+            huggingface_repo,
         )
 
         def _on_model_download_progress(value, msg):
             self.progress_bar.setValue(value)
             self.progress_label.setText(msg)
 
-        def _on_model_download_finished():
+        def _on_model_download_succeeded(_model_path):
             FasterWhisperDownloadDialog.is_downloading = False
             self._set_all_download_buttons_enabled(True)
+            self.progress_bar.setRange(0, 100)
             # 更新状态
             status_item = QTableWidgetItem(self.tr("已下载"))
             status_item.setForeground(Qt.green)  # type: ignore
@@ -560,35 +590,18 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
             model = FASTER_WHISPER_MODELS[row]
 
-            # 更新主设置对话框的模型选择
+            # 下载完成后保留全部模型选项，并自动选择刚下载的模型。
             if self.setting_widget:
-                # 保存当前值并清空
-                current_value = cfg.faster_whisper_model.value
-                combo = self.setting_widget.model_card.comboBox
-                combo.clear()
-
-                # 找出已下载的模型
-                available = []
-                model_map = {
-                    m["label"].lower(): m["value"] for m in FASTER_WHISPER_MODELS
-                }
-                for enum_val in FasterWhisperModelEnum:
-                    if enum_val.value in model_map:
-                        if (MODEL_PATH / model_map[enum_val.value]).exists():
-                            available.append(enum_val)
-
-                # 重建下拉框
-                self.setting_widget.model_card.optionToText = {
-                    e: e.value for e in available
-                }
-                for enum_val in available:
-                    combo.addItem(enum_val.value, userData=enum_val)
-
-                # 恢复选择
-                if current_value in available:
-                    combo.setCurrentText(current_value.value)
-                elif combo.count() > 0:
-                    combo.setCurrentIndex(0)
+                selected_model = next(
+                    (
+                        enum_value
+                        for enum_value in FasterWhisperModelEnum
+                        if enum_value.value == model["label"].lower()
+                    ),
+                    None,
+                )
+                if selected_model is not None:
+                    self.setting_widget.model_card.setValue(selected_model)
 
             InfoBar.success(
                 self.tr("下载成功"),
@@ -602,6 +615,7 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         def _on_model_download_error(error):
             FasterWhisperDownloadDialog.is_downloading = False
             self._set_all_download_buttons_enabled(True)
+            self.progress_bar.setRange(0, 100)
             if download_btn:
                 download_btn.setEnabled(True)
 
@@ -610,8 +624,9 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
             self.progress_label.hide()
 
         self.model_download_thread.progress.connect(_on_model_download_progress)
-        self.model_download_thread.finished.connect(_on_model_download_finished)
+        self.model_download_thread.succeeded.connect(_on_model_download_succeeded)
         self.model_download_thread.error.connect(_on_model_download_error)
+        self.progress_bar.setRange(0, 0)
         self.model_download_thread.start()
 
     def _set_all_download_buttons_enabled(self, enabled: bool):
@@ -631,9 +646,9 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
     def _open_model_folder(self):
         """打开模型文件夹"""
-        if os.path.exists(MODEL_PATH):
-            # 根据操作系统打开文件夹
-            open_folder(str(MODEL_PATH))
+        model_root = get_faster_whisper_model_root()
+        model_root.mkdir(parents=True, exist_ok=True)
+        open_folder(str(model_root))
 
     def _open_program_folder(self):
         """打开程序文件夹"""
@@ -706,24 +721,6 @@ class FasterWhisperSettingWidget(QWidget):
             [model.value for model in FasterWhisperModelEnum],
             self.setting_group,
         )
-
-        # 检查未下载的模型并从下拉框中移除
-        for i in range(self.model_card.comboBox.count() - 1, -1, -1):
-            model_text = self.model_card.comboBox.itemText(i).lower()
-            model_config = next(
-                (
-                    model
-                    for model in FASTER_WHISPER_MODELS
-                    if model["label"].lower() == model_text
-                ),
-                None,
-            )
-            if model_config:
-                model_path = Path(MODEL_PATH) / model_config["value"]
-                model_bin_path = model_path / "model.bin"
-                if model_bin_path.exists():
-                    continue
-            self.model_card.comboBox.removeItem(i)
 
         # 创建管理模型卡片
         self.manage_model_card = HyperlinkCard(
@@ -979,10 +976,14 @@ class FasterWhisperSettingWidget(QWidget):
             self.show_error_info(self.tr("模型配置不存在"))
             return False
 
-        model_path = MODEL_PATH / model_config["value"]
+        model_path = get_faster_whisper_model_path(model_config)
         model_files = model_path / "model.bin"
         # 检查模型文件是否存在
-        if not model_path.exists() and not model_files.exists():
-            self.show_error_info(self.tr("模型文件不存在: ") + model_value)
+        if not model_files.is_file():
+            self.show_error_info(
+                self.tr("模型尚未下载: ")
+                + model_value
+                + self.tr("。请打开模型管理完成下载。")
+            )
             return False
         return True

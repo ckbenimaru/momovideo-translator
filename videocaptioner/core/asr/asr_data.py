@@ -51,12 +51,18 @@ def handle_long_path(path: str) -> str:
 
 class ASRDataSeg:
     def __init__(
-        self, text: str, start_time: int, end_time: int, translated_text: str = ""
+        self,
+        text: str,
+        start_time: int,
+        end_time: int,
+        translated_text: str = "",
+        language: str = "",
     ):
         self.text = text
         self.translated_text = translated_text
         self.start_time = start_time
         self.end_time = end_time
+        self.language = language
 
     def to_srt_ts(self) -> str:
         """Convert to SRT timestamp format"""
@@ -199,7 +205,10 @@ class ASRData:
                 word_end_time = min(current_time + word_duration, seg.end_time)
                 new_segments.append(
                     ASRDataSeg(
-                        text=word, start_time=current_time, end_time=word_end_time
+                        text=word,
+                        start_time=current_time,
+                        end_time=word_end_time,
+                        language=seg.language,
                     )
                 )
                 current_time = word_end_time
@@ -314,6 +323,7 @@ class ASRData:
                 "end_time": segment.end_time,
                 "original_subtitle": segment.text,
                 "translated_subtitle": segment.translated_text,
+                "language": segment.language,
             }
         return result_json
 
@@ -461,8 +471,23 @@ class ASRData:
             seg.translated_text for seg in self.segments[start_index : end_index + 1]
             if seg.translated_text
         )
-        merged_seg = ASRDataSeg(merged_text, merged_start_time, merged_end_time,
-                                translated_text=merged_translated)
+        languages = list(
+            dict.fromkeys(
+                seg.language
+                for seg in self.segments[start_index : end_index + 1]
+                if seg.language
+            )
+        )
+        merged_language = languages[0] if len(languages) == 1 else (
+            "Multilingual" if languages else ""
+        )
+        merged_seg = ASRDataSeg(
+            merged_text,
+            merged_start_time,
+            merged_end_time,
+            translated_text=merged_translated,
+            language=merged_language,
+        )
         self.segments[start_index : end_index + 1] = [merged_seg]
 
     def merge_with_next_segment(self, index: int) -> None:

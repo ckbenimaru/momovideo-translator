@@ -113,6 +113,14 @@ class TaskFactory:
             need_word_time_stamp = False
             output_path = str(Path(file_path).parent / f"{file_name}.srt")
 
+        from videocaptioner.core.asr.qwen3_asr import resolve_qwen_paths
+
+        qwen_runtime_dir, qwen_model_dir = resolve_qwen_paths(
+            cfg.qwen_runtime_dir.value,
+            cfg.qwen_model_dir.value,
+            cfg.faster_whisper_model_dir.value,
+        )
+
         config = TranscribeConfig(
             transcribe_model=cfg.transcribe_model.value,
             transcribe_language=LANGUAGES[cfg.transcribe_language.value.value],
@@ -138,6 +146,13 @@ class TaskFactory:
             faster_whisper_ff_mdx_kim2=cfg.faster_whisper_ff_mdx_kim2.value,
             faster_whisper_one_word=cfg.faster_whisper_one_word.value,
             faster_whisper_prompt=cfg.faster_whisper_prompt.value,
+            # Qwen3-ASR 配置
+            qwen_runtime_dir=str(qwen_runtime_dir),
+            qwen_model_dir=str(qwen_model_dir),
+            qwen_asr_model=cfg.qwen_asr_model.value,
+            qwen_use_forced_aligner=cfg.qwen_use_forced_aligner.value,
+            qwen_device=cfg.qwen_device.value,
+            qwen_chunk_seconds=cfg.qwen_chunk_seconds.value,
             ideal_duration=cfg.subtitle_ideal_duration.value,
             max_duration=cfg.subtitle_max_duration.value,
             min_duration=cfg.subtitle_min_duration.value,

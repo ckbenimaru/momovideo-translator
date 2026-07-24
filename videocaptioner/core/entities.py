@@ -122,6 +122,7 @@ class TranscribeModelEnum(Enum):
     JIANYING = "J 接口"
     WHISPER_API = "Whisper [API] ✨"
     FASTER_WHISPER = "FasterWhisper ✨"
+    QWEN3_ASR = "Qwen3-ASR ✨"
     WHISPER_CPP = "WhisperCpp"
 
 
@@ -361,6 +362,12 @@ class FasterWhisperModelEnum(Enum):
     LARGE_V3_TURBO = "large-v3-turbo"
 
 
+class Qwen3ASRModelEnum(Enum):
+    """Locally supported Qwen3-ASR checkpoints."""
+
+    ASR_1_7B = "Qwen3-ASR-1.7B-hf"
+
+
 LANGUAGES = {
     "自动检测": "",
     "英语": "en",
@@ -509,6 +516,10 @@ ASR_LANGUAGE_CAPABILITIES: dict[TranscribeModelEnum, ASRLanguageCapability] = {
         supported_languages=_get_all_languages_except_auto(),
         supports_auto=False,
     ),
+    TranscribeModelEnum.QWEN3_ASR: ASRLanguageCapability(
+        supported_languages=_get_all_languages_except_auto(),
+        supports_auto=True,
+    ),
     TranscribeModelEnum.WHISPER_CPP: ASRLanguageCapability(
         supported_languages=_get_all_languages_except_auto(),
         supports_auto=True,
@@ -587,6 +598,13 @@ class TranscribeConfig:
     faster_whisper_ff_mdx_kim2: bool = False
     faster_whisper_one_word: bool = True
     faster_whisper_prompt: Optional[str] = None
+    # Qwen3-ASR local configuration
+    qwen_runtime_dir: Optional[str] = None
+    qwen_model_dir: Optional[str] = None
+    qwen_asr_model: Optional[Qwen3ASRModelEnum] = None
+    qwen_use_forced_aligner: bool = True
+    qwen_device: str = "cuda"
+    qwen_chunk_seconds: int = 30
     ideal_duration: float = 3.5
     max_duration: float = 6.0
     min_duration: float = 0.8
@@ -637,6 +655,14 @@ class TranscribeConfig:
                 f"Re-segmentation: ideal={self.ideal_duration}s, max={self.max_duration}s, "
                 f"min={self.min_duration}s, pause={self.pause_threshold}s"
             )
+
+        elif self.transcribe_model == TranscribeModelEnum.QWEN3_ASR:
+            lines.append(
+                f"Model: {self.qwen_asr_model.value if self.qwen_asr_model else 'None'}"
+            )
+            lines.append(f"Device: {self.qwen_device}")
+            lines.append(f"Forced Aligner: {self.qwen_use_forced_aligner}")
+            lines.append(f"Chunk Duration: {self.qwen_chunk_seconds}s")
 
         elif self.transcribe_model == TranscribeModelEnum.WHISPER_CPP:
             lines.append(

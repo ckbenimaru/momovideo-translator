@@ -39,6 +39,7 @@ docs/.vitepress/dist/
 !/resource/bin/bin_environment.txt
 /AppData/
 /work-dir/
+/qwen3-asr-runtime/
 /*.srt
 /*.mp4
 *.log

@@ -18,6 +18,7 @@ from videocaptioner.core.utils.encoding_policy import (
 from videocaptioner.core.utils.logger import setup_logger
 
 from .ass_utils import auto_wrap_ass_file
+from .geometry import calculate_subtitle_geometry, probe_display_geometry
 
 if TYPE_CHECKING:
     from videocaptioner.core.asr.asr_data import ASRData
@@ -44,7 +45,13 @@ def _check_cuda_available() -> bool:
     return check_cuda_available()
 
 
-def _scale_ass_style(style_str: str, scale_factor: float) -> str:
+def _scale_ass_style(
+    style_str: str,
+    scale_factor: float,
+    video_width: Optional[int] = None,
+    video_height: Optional[int] = None,
+    reference_height: int = 720,
+) -> str:
     """
     缩放 ASS 样式中的数值参数
 
@@ -55,7 +62,17 @@ def _scale_ass_style(style_str: str, scale_factor: float) -> str:
     Returns:
         缩放后的 ASS 样式字符串
     """
-    if scale_factor == 1.0:
+    geometry = None
+    if video_width is not None and video_height is not None:
+        geometry = calculate_subtitle_geometry(
+            video_width,
+            video_height,
+            reference_width=round(reference_height * 16 / 9),
+            reference_height=reference_height,
+        )
+        scale_factor = geometry.typography_scale
+
+    if scale_factor == 1.0 and geometry is None:
         return style_str
 
     lines = style_str.split("\n")
@@ -66,13 +83,21 @@ def _scale_ass_style(style_str: str, scale_factor: float) -> str:
             parts = line.split(",")
             if len(parts) >= 23:
                 # parts[2]: Fontsize
-                parts[2] = str(int(float(parts[2]) * scale_factor))
+                parts[2] = str(max(1, int(round(float(parts[2]) * scale_factor))))
                 # parts[13]: Spacing
                 parts[13] = str(float(parts[13]) * scale_factor)
                 # parts[16]: Outline
                 parts[16] = str(float(parts[16]) * scale_factor)
-                # parts[21]: MarginV (垂直间距)
-                parts[21] = str(int(float(parts[21]) * scale_factor))
+                # parts[17]: Shadow
+                parts[17] = str(float(parts[17]) * scale_factor)
+                if geometry is not None:
+                    # Keep every style inside the same orientation-safe area.
+                    parts[19] = str(geometry.horizontal_margin)
+                    parts[20] = str(geometry.horizontal_margin)
+                    parts[21] = str(geometry.bottom_margin)
+                else:
+                    # parts[21]: MarginV (legacy height-based behavior)
+                    parts[21] = str(int(float(parts[21]) * scale_factor))
                 line = ",".join(parts)
         scaled_lines.append(line)
 
@@ -135,7 +160,13 @@ def render_ass_preview(
 
     # 从 ASS 内容中提取参考高度，根据图片高度自动缩放样式
     scale_factor = height / reference_height
-    style_str = _scale_ass_style(style_str, scale_factor)
+    style_str = _scale_ass_style(
+        style_str,
+        scale_factor,
+        video_width=width,
+        video_height=height,
+        reference_height=reference_height,
+    )
 
     # 重新生成缩放后的 ASS 内容
     ass_content = ASS_TEMPLATE.format(
@@ -229,6 +260,10 @@ def render_ass_preview(
 
 def _get_video_resolution(video_path: str) -> Tuple[int, int]:
     """获取视频分辨率"""
+    try:
+        return probe_display_geometry(video_path)
+    except (OSError, RuntimeError, ValueError):
+        logger.warning("ffprobe display geometry failed; falling back to FFmpeg text")
     result = subprocess.run(
         ["ffmpeg", "-i", video_path],
         capture_output=True,
@@ -280,9 +315,15 @@ def render_ass_video(
     # 获取视频分辨率
     width, height = _get_video_resolution(video_path)
 
-    # 根据视频高度自动缩放样式
+    # Landscape keeps the legacy height scale; portrait follows available width.
     scale_factor = height / reference_height
-    style_str = _scale_ass_style(style_str, scale_factor)
+    style_str = _scale_ass_style(
+        style_str,
+        scale_factor,
+        video_width=width,
+        video_height=height,
+        reference_height=reference_height,
+    )
 
     # 生成临时 ASS 文件（传入实际视频分辨率）
     with tempfile.NamedTemporaryFile(
