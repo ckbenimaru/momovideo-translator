@@ -2,7 +2,7 @@
 
 以 [VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner) 為基礎修改的本地影片轉錄、字幕翻譯及影片合成工具。
 
-本倉庫只保存核心原始碼及必要字型，不包含 Python 執行環境、FFmpeg、Faster-Whisper-XXL 程式、Qwen3-ASR 執行環境、CUDA 元件或語音模型。這些大型元件由使用者按需要自行安裝或在軟體內下載。
+本倉庫只保存核心原始碼及必要字型，不包含 Python 執行環境、FFmpeg、Faster-Whisper-XXL 程式、Qwen3-ASR 執行環境、Ollama、CUDA 元件或 AI 模型。這些大型元件由使用者按需要自行安裝或在軟體內下載。
 
 ## 主要改動
 
@@ -84,6 +84,19 @@ D:\AI\QwenModels\Qwen3-ForcedAligner-0.6B-hf\
 
 Qwen3-ASR 只負責離線語音辨識；辨識後的字幕會沿用 momo 現有的字幕重切分與翻譯流程。Forced Aligner 支援中文、英文、粵語、法文、德文、意大利文、日文、韓文、葡萄牙文、俄文及西班牙文。其他語言會使用估算時間戳回退。
 
+## 預設離線翻譯
+
+momo 預設使用 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M` 翻譯字幕，建議將便攜環境與模型放在：
+
+```text
+D:\AI\Ollama\ollama.exe
+D:\AI\OllamaModels\
+```
+
+翻譯服務地址為 `http://127.0.0.1:11434/v1`。程式開始翻譯時會自動啟動本機 Ollama、檢查模型是否完整，任務結束後自動卸載模型以釋放顯存。RTX 4060 8 GB 預設使用單一翻譯佇列及每批最多 8 條字幕，避免同時載入造成顯存不足。
+
+簡體／繁體輸出會再經 OpenCC 統一；Google 免費翻譯接口仍保留為可手動選擇的快速備用。本專案不使用或要求 Google Cloud 付費 API。
+
 ## 預設字幕切分
 
 - 理想時長：3.5 秒
@@ -101,6 +114,7 @@ Qwen3-ASR 只負責離線語音辨識；辨識後的字幕會沿用 momo 現有�
 
 - 使用 Faster Whisper 或 Qwen3-ASR 本地轉錄時，語音檔案不會上傳至 Bilibili、Google 或其他語音平台；模型權重只在安裝／下載階段連線取得。
 - 使用 Google 翻譯時，字幕文字仍會傳送至 Google 翻譯服務。
+- 使用預設 Qwen3-4B／Ollama 翻譯時，字幕文字只在本機處理，不會上傳第三方。
 - 使用其他翻譯或 LLM 服務時，字幕文字及所提供的上下文會按該服務的流程傳送。
 
 如需完全離線處理，請同時選用本地轉錄及本地翻譯方案。

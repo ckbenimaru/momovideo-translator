@@ -1,5 +1,6 @@
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -34,8 +35,11 @@ class QwenSettingsTests(unittest.TestCase):
 
     def test_transcription_card_can_switch_to_qwen(self):
         card = TranscriptionSettingCard()
-        card.on_model_changed(TranscribeModelEnum.QWEN3_ASR.value)
-        self.assertIs(card.stacked_widget.currentWidget(), card.qwen3_asr_widget)
+        self.assertIsNone(card.qwen3_asr_widget)
+        self.assertIsNone(card.faster_whisper_widget)
+        with patch.object(Qwen3ASRSettingWidget, "refresh_status"):
+            card.on_model_changed(TranscribeModelEnum.QWEN3_ASR.value)
+            self.assertIs(card.stacked_widget.currentWidget(), card.qwen3_asr_widget)
 
     def test_progress_is_visible_on_active_install_card(self):
         widget = Qwen3ASRSettingWidget()
@@ -47,6 +51,14 @@ class QwenSettingsTests(unittest.TestCase):
 
     def test_runtime_uses_native_transformers_qwen_api(self):
         self.assertIn("transformers==5.14.1", QWEN_RUNTIME_PACKAGES)
+
+    def test_constructor_does_not_validate_qwen_runtime_synchronously(self):
+        with patch(
+            "videocaptioner.ui.components.Qwen3ASRSettingWidget.validate_qwen_runtime"
+        ) as validate:
+            widget = Qwen3ASRSettingWidget()
+            self.assertFalse(validate.called)
+            self.assertIsNone(widget.runtime_check_thread)
 
 
 if __name__ == "__main__":

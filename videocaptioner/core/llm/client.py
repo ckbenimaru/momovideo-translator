@@ -74,6 +74,18 @@ def get_llm_client() -> OpenAI:
     return _global_client
 
 
+def reset_llm_client() -> None:
+    """Discard a client created for a previous provider/base URL."""
+    global _global_client
+    with _client_lock:
+        if _global_client is not None:
+            try:
+                _global_client.close()
+            except Exception:
+                pass
+        _global_client = None
+
+
 def before_sleep_log(retry_state: RetryCallState) -> None:
     logger.warning(
         "Rate Limit Error, sleeping and retrying... Please lower your thread concurrency or use better OpenAI API."

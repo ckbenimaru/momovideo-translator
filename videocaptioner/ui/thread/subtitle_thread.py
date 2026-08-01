@@ -13,6 +13,7 @@ from videocaptioner.core.entities import (
     TranslatorServiceEnum,
 )
 from videocaptioner.core.llm.check_llm import check_llm_connection
+from videocaptioner.core.llm.client import reset_llm_client
 from videocaptioner.core.llm.context import (
     clear_task_context,
     generate_task_id,
@@ -26,6 +27,11 @@ from videocaptioner.core.subtitle.resegment import (
     resegment_translations,
 )
 from videocaptioner.core.translate.factory import TranslatorFactory
+from videocaptioner.core.translate.ollama_runtime import (
+    is_local_ollama_url,
+    prepare_local_ollama,
+    release_ollama_model,
+)
 from videocaptioner.core.translate.types import TranslatorType
 from videocaptioner.core.utils.logger import setup_logger
 
@@ -88,6 +94,9 @@ class SubtitleThread(QThread):
         if not config:
             raise Exception(self.tr("LLM API 未配置, 请检查LLM配置"))
         if config.base_url and config.api_key and config.llm_model:
+            if is_local_ollama_url(config.base_url):
+                self.progress.emit(2, self.tr("正在啟動 Qwen3 離線翻譯..."))
+                prepare_local_ollama(config.llm_model)
             success, message = check_llm_connection(
                 config.base_url,
                 config.api_key,
@@ -97,6 +106,7 @@ class SubtitleThread(QThread):
                 raise Exception(f"{self.tr('LLM API 测试失败: ')}{message or ''}")
             os.environ["OPENAI_BASE_URL"] = config.base_url
             os.environ["OPENAI_API_KEY"] = config.api_key
+            reset_llm_client()
             return config
         else:
             raise Exception(self.tr("LLM API 未配置, 请检查LLM配置"))
@@ -246,6 +256,9 @@ class SubtitleThread(QThread):
             self.error.emit(str(e))
             self.progress.emit(100, self.tr("字幕处理失败"))
         finally:
+            config = self.task.subtitle_config
+            if config and is_local_ollama_url(config.base_url):
+                release_ollama_model(config.llm_model or "")
             clear_task_context()
 
     def need_llm(self, subtitle_config: SubtitleConfig, asr_data: ASRData):
@@ -339,8 +352,11 @@ class RetranslateThread(QThread):
             if config.translator_service == TranslatorServiceEnum.OPENAI:
                 if not (config.base_url and config.api_key and config.llm_model):
                     raise Exception("LLM API 未配置，请检查 LLM 配置")
+                if is_local_ollama_url(config.base_url):
+                    prepare_local_ollama(config.llm_model)
                 os.environ["OPENAI_BASE_URL"] = config.base_url
                 os.environ["OPENAI_API_KEY"] = config.api_key
+                reset_llm_client()
 
             # 构建仅含选中行的 ASRData
             asr_data = ASRData.from_json(self.selected_data)
@@ -361,4 +377,7 @@ class RetranslateThread(QThread):
             logger.exception(f"重新翻译失败: {e}")
             self.error.emit(str(e))
         finally:
+            config = self.subtitle_config
+            if is_local_ollama_url(config.base_url):
+                release_ollama_model(config.llm_model or "")
             clear_task_context()

@@ -15,6 +15,8 @@ from videocaptioner.core.entities import (
     TranscribeTask,
     TranscriptAndSubtitleTask,
 )
+from videocaptioner.core.translate.types import TargetLanguage
+from videocaptioner.core.utils.path_utils import sanitize_filename_component
 from videocaptioner.ui.common.config import cfg
 
 
@@ -22,16 +24,33 @@ class TaskFactory:
     """任务工厂类，用于创建各种类型的任务"""
 
     @staticmethod
-    def get_ass_style(style_name: str) -> str:
+    def get_ass_style(
+        style_name: str,
+        target_language: Optional[TargetLanguage] = None,
+    ) -> str:
         """获取 ASS 字幕样式内容 (via style_manager, JSON-first with .txt fallback)"""
         from videocaptioner.core.subtitle.style_manager import SubtitleStyle, load_style
 
-        style = (
-            SubtitleStyle(name="youtube-modern")
-            if style_name in {"default", "youtube-modern"}
-            else load_style(style_name)
-        )
+        is_builtin = style_name in {"default", "youtube-modern"}
+        style = SubtitleStyle(name="youtube-modern") if is_builtin else load_style(style_name)
         if style is not None:
+            if is_builtin:
+                font_by_language = {
+                    TargetLanguage.TRADITIONAL_CHINESE: "Noto Sans TC",
+                    TargetLanguage.CANTONESE: "Noto Sans TC",
+                    TargetLanguage.SIMPLIFIED_CHINESE: "Noto Sans SC",
+                    TargetLanguage.ENGLISH: "Noto Sans",
+                    TargetLanguage.ENGLISH_US: "Noto Sans",
+                    TargetLanguage.ENGLISH_UK: "Noto Sans",
+                }
+                style.font_name = font_by_language.get(
+                    target_language,
+                    "Noto Sans TC" if target_language is None else "Noto Sans",
+                )
+                # to_ass_string() inherits the main font for Secondary when no
+                # explicit secondary style exists, keeping bilingual cues safe.
+                style.secondary = None
+                style.bold = False
             # Older portable builds could persist an 8 px, zero-outline preset.
             # It is technically rendered by FFmpeg but is effectively invisible
             # on 720p/1080p video. Repair only clearly unusable presets so normal
@@ -45,7 +64,10 @@ class TaskFactory:
                     style.secondary.outline_width = max(
                         style.secondary.outline_width, 2.0
                     )
-            return style.to_ass_string()
+            ass_style = style.to_ass_string()
+            if is_builtin:
+                ass_style = f"; MomoAutoFontByText: yes\n{ass_style}"
+            return ass_style
         return ""
 
     @staticmethod
@@ -98,7 +120,7 @@ class TaskFactory:
     ) -> TranscribeTask:
         """创建转录任务"""
         # 获取文件名
-        file_name = Path(file_path).stem
+        file_name = sanitize_filename_component(Path(file_path).stem)
 
         # 构建输出路径
         if need_next_task:
@@ -185,6 +207,7 @@ class TaskFactory:
         output_name = (
             Path(file_path).stem.replace("【原始字幕】", "").replace("【下载字幕】", "")
         )
+        output_name = sanitize_filename_component(output_name)
         # 只在需要翻译时添加翻译服务后缀
         suffix = (
             f"-{cfg.translator_service.value.value}" if cfg.need_translate.value else ""
@@ -234,6 +257,7 @@ class TaskFactory:
             api_key = ""
             llm_model = ""
 
+        local_ollama = current_service == LLMServiceEnum.OLLAMA
         config = SubtitleConfig(
             # 翻译配置
             base_url=base_url,
@@ -246,11 +270,17 @@ class TaskFactory:
             need_reflect=cfg.need_reflect_translate.value,
             need_translate=cfg.need_translate.value,
             need_optimize=cfg.need_optimize.value,
-            thread_num=cfg.thread_num.value,
-            batch_size=cfg.batch_size.value,
+            # A single local queue avoids duplicate model loads and GPU memory
+            # spikes on 8 GB cards. A batch still contains enough subtitle
+            # context for accurate translation.
+            thread_num=1 if local_ollama else cfg.thread_num.value,
+            batch_size=min(cfg.batch_size.value, 8) if local_ollama else cfg.batch_size.value,
             # 字幕布局、样式
             subtitle_layout=cfg.subtitle_layout.value,  # Now returns SubtitleLayoutEnum
-            subtitle_style=TaskFactory.get_ass_style(cfg.subtitle_style_name.value),
+            subtitle_style=TaskFactory.get_ass_style(
+                cfg.subtitle_style_name.value,
+                cfg.target_language.value if cfg.need_translate.value else None,
+            ),
             # 字幕分割
             max_word_count_cjk=cfg.max_word_count_cjk.value,
             max_word_count_english=cfg.max_word_count_english.value,
@@ -290,7 +320,8 @@ class TaskFactory:
     ) -> SynthesisTask:
         """创建视频合成任务"""
         video = Path(video_path)
-        output_path = str(video.parent / f"{video.stem}.done{video.suffix}")
+        video_stem = sanitize_filename_component(video.stem)
+        output_path = str(video.parent / f"{video_stem}.done{video.suffix}")
 
         # 只有启用样式时才传入样式配置
         use_style = cfg.use_subtitle_style.value
@@ -300,7 +331,14 @@ class TaskFactory:
             render_mode=cfg.subtitle_render_mode.value,
             video_quality=cfg.video_quality.value,
             subtitle_layout=cfg.subtitle_layout.value,
-            ass_style=TaskFactory.get_ass_style(cfg.subtitle_style_name.value) if use_style else "",
+            ass_style=(
+                TaskFactory.get_ass_style(
+                    cfg.subtitle_style_name.value,
+                    cfg.target_language.value if cfg.need_translate.value else None,
+                )
+                if use_style
+                else ""
+            ),
             rounded_style=TaskFactory.get_rounded_style() if use_style else None,
         )
 
@@ -325,8 +363,9 @@ class TaskFactory:
     ) -> TranscriptAndSubtitleTask:
         """创建转录和字幕任务"""
         if output_path is None:
+            file_stem = sanitize_filename_component(Path(file_path).stem)
             output_path = str(
-                Path(file_path).parent / f"{Path(file_path).stem}_processed.srt"
+                Path(file_path).parent / f"{file_stem}_processed.srt"
             )
 
         return TranscriptAndSubtitleTask(
@@ -345,9 +384,10 @@ class TaskFactory:
     ) -> FullProcessTask:
         """创建完整处理任务（转录+字幕+合成）"""
         if output_path is None:
+            file_stem = sanitize_filename_component(Path(file_path).stem)
             output_path = str(
                 Path(file_path).parent
-                / f"{Path(file_path).stem}.done{Path(file_path).suffix}"
+                / f"{file_stem}.done{Path(file_path).suffix}"
             )
 
         return FullProcessTask(

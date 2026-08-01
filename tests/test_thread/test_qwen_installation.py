@@ -7,7 +7,10 @@ from videocaptioner.ui.thread.qwen_model_download_thread import (
     download_qwen_model,
     validate_qwen_model,
 )
-from videocaptioner.ui.thread.qwen_runtime_thread import qwen_runtime_commands
+from videocaptioner.ui.thread.qwen_runtime_thread import (
+    QwenRuntimeCheckThread,
+    qwen_runtime_commands,
+)
 
 
 class QwenInstallationTests(unittest.TestCase):
@@ -48,6 +51,19 @@ class QwenInstallationTests(unittest.TestCase):
         self.assertIn("transformers==5.14.1", flattened)
         self.assertTrue(any("torch" in item for item in flattened))
         self.assertIn("--no-cache-dir", flattened)
+
+    def test_runtime_check_thread_reports_validation_result(self):
+        results = []
+        thread = QwenRuntimeCheckThread("X:/QwenRuntime")
+        thread.completed.connect(
+            lambda valid, details: results.append((valid, details))
+        )
+        with patch(
+            "videocaptioner.ui.thread.qwen_runtime_thread.validate_qwen_runtime",
+            return_value=(True, "CUDA ready"),
+        ):
+            thread.run()
+        self.assertEqual(results, [(True, "CUDA ready")])
 
 
 if __name__ == "__main__":

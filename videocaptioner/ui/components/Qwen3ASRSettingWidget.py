@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import (
     ComboBoxSettingCard,
@@ -17,6 +17,7 @@ from qfluentwidgets import FluentIcon as FIF
 
 from videocaptioner.core.asr.qwen3_asr import (
     QWEN_ALIGNER_DIR_NAME,
+    qwen_runtime_python,
     resolve_qwen_paths,
 )
 from videocaptioner.core.entities import Qwen3ASRModelEnum
@@ -28,6 +29,7 @@ from videocaptioner.ui.thread.qwen_model_download_thread import (
     validate_qwen_model,
 )
 from videocaptioner.ui.thread.qwen_runtime_thread import (
+    QwenRuntimeCheckThread,
     QwenRuntimeInstallThread,
     validate_qwen_runtime,
 )
@@ -66,11 +68,14 @@ class Qwen3ASRSettingWidget(QWidget):
         if int(cfg.qwen_chunk_seconds.value) == 120:
             cfg.set(cfg.qwen_chunk_seconds, 30)
         self.runtime_thread: Optional[QwenRuntimeInstallThread] = None
+        self.runtime_check_thread: Optional[QwenRuntimeCheckThread] = None
         self.download_thread: Optional[QwenModelDownloadThread] = None
         self._active_card = None
         self._setup_ui()
         self._connect_signals()
-        self.refresh_status()
+        self._refresh_model_status()
+        self._set_initial_runtime_status()
+        QTimer.singleShot(0, self.refresh_status)
 
     def _setup_ui(self):
         # Match the main window/Faster Whisper page: the page and its scroll
@@ -281,28 +286,67 @@ class Qwen3ASRSettingWidget(QWidget):
             parent=self.window(),
         )
 
-    def refresh_status(self):
-        runtime_ok, runtime_details = validate_qwen_runtime(get_qwen_runtime_dir())
-        self.runtime_install_card.setContent(
-            self.tr("已安装：") + runtime_details
-            if runtime_ok
-            else self.tr("未安装：") + runtime_details
-        )
+    def _set_initial_runtime_status(self):
+        if qwen_runtime_python(get_qwen_runtime_dir()).is_file():
+            self.runtime_install_card.setContent(self.tr("等待背景檢查…"))
+        else:
+            self.runtime_install_card.setContent(
+                self.tr("未安裝：Python 環境不存在")
+            )
 
+    def _refresh_model_status(self):
         asr_path = get_qwen_model_root() / QWEN_ASR_REPO.split("/")[-1]
         aligner_path = get_qwen_model_root() / QWEN_ALIGNER_DIR_NAME
         try:
             validate_qwen_model(asr_path)
-            self.asr_download_card.setContent(self.tr("已下载：") + str(asr_path))
+            self.asr_download_card.setContent(
+                self.tr("已下載：") + str(asr_path)
+            )
         except RuntimeError:
-            self.asr_download_card.setContent(self.tr("未下载，约需数 GB 空间"))
+            self.asr_download_card.setContent(
+                self.tr("未下載，約需數 GB 空間")
+            )
         try:
             validate_qwen_model(aligner_path)
             self.aligner_download_card.setContent(
-                self.tr("已下载：") + str(aligner_path)
+                self.tr("已下載：") + str(aligner_path)
             )
         except RuntimeError:
-            self.aligner_download_card.setContent(self.tr("未下载，时间轴功能必需"))
+            self.aligner_download_card.setContent(
+                self.tr("未下載，時間軸功能需要此模型")
+            )
+
+    def refresh_status(self):
+        """Refresh model files immediately and validate CUDA in the background."""
+        self._refresh_model_status()
+        if (
+            self.runtime_check_thread is not None
+            and self.runtime_check_thread.isRunning()
+        ):
+            return
+
+        runtime_dir = get_qwen_runtime_dir()
+        if not qwen_runtime_python(runtime_dir).is_file():
+            self._set_initial_runtime_status()
+            return
+
+        self.runtime_install_card.setContent(
+            self.tr("正在背景檢查 PyTorch／CUDA…")
+        )
+        self.runtime_check_thread = QwenRuntimeCheckThread(str(runtime_dir))
+        self.runtime_check_thread.completed.connect(
+            self._on_runtime_status_checked
+        )
+        self.runtime_check_thread.start()
+
+    def _on_runtime_status_checked(
+        self, runtime_ok: bool, runtime_details: str
+    ):
+        self.runtime_install_card.setContent(
+            self.tr("已安裝：") + runtime_details
+            if runtime_ok
+            else self.tr("未安裝：") + runtime_details
+        )
 
     def check_qwen_installation(self) -> bool:
         runtime_ok, _details = validate_qwen_runtime(get_qwen_runtime_dir())

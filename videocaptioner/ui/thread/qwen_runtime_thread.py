@@ -161,3 +161,22 @@ class QwenRuntimeInstallThread(QThread):
     def stop(self):
         if self.process and self.process.poll() is None:
             self.process.terminate()
+
+
+class QwenRuntimeCheckThread(QThread):
+    """Validate the isolated Qwen runtime without blocking the Qt UI thread."""
+
+    completed = pyqtSignal(bool, str)
+
+    def __init__(self, runtime_dir: str):
+        super().__init__()
+        self.runtime_dir = runtime_dir
+
+    def run(self):
+        try:
+            valid, details = validate_qwen_runtime(self.runtime_dir)
+            self.completed.emit(valid, details)
+        except subprocess.TimeoutExpired:
+            self.completed.emit(False, "運行環境檢查逾時")
+        except Exception as error:
+            self.completed.emit(False, f"{type(error).__name__}: {error}")

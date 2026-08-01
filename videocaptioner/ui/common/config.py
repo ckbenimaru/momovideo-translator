@@ -81,7 +81,7 @@ class Config(QConfig):
     llm_service = OptionsConfigItem(
         "LLM",
         "LLMService",
-        LLMServiceEnum.OPENAI,
+        LLMServiceEnum.OLLAMA,
         OptionsValidator(LLMServiceEnum),
         EnumSerializer(LLMServiceEnum),
     )
@@ -102,9 +102,13 @@ class Config(QConfig):
         "LLM", "DeepSeek_API_Base", "https://api.deepseek.com/v1"
     )
 
-    ollama_model = ConfigItem("LLM", "Ollama_Model", "llama2")
+    ollama_model = ConfigItem(
+        "LLM", "Ollama_Model", "qwen3:4b-instruct-2507-q4_K_M"
+    )
     ollama_api_key = ConfigItem("LLM", "Ollama_API_Key", "ollama")
-    ollama_api_base = ConfigItem("LLM", "Ollama_API_Base", "http://localhost:11434/v1")
+    ollama_api_base = ConfigItem(
+        "LLM", "Ollama_API_Base", "http://127.0.0.1:11434/v1"
+    )
 
     lm_studio_model = ConfigItem("LLM", "LmStudio_Model", "qwen2.5:7b")
     lm_studio_api_key = ConfigItem("LLM", "LmStudio_API_Key", "lmstudio")
@@ -130,7 +134,7 @@ class Config(QConfig):
     translator_service = OptionsConfigItem(
         "Translate",
         "TranslatorServiceEnum",
-        TranslatorServiceEnum.BING,
+        TranslatorServiceEnum.OPENAI,
         OptionsValidator(TranslatorServiceEnum),
         EnumSerializer(TranslatorServiceEnum),
     )
@@ -145,7 +149,7 @@ class Config(QConfig):
     transcribe_model = OptionsConfigItem(
         "Transcribe",
         "TranscribeModel",
-        TranscribeModelEnum.BIJIAN,
+        TranscribeModelEnum.QWEN3_ASR,
         PlatformAwareTranscribeModelValidator(),
         EnumSerializer(TranscribeModelEnum),
     )

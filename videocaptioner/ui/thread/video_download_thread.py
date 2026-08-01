@@ -1,5 +1,4 @@
 import os
-import re
 from pathlib import Path
 
 import requests
@@ -8,6 +7,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from videocaptioner.config import APPDATA_PATH
 from videocaptioner.core.utils.logger import setup_logger
+from videocaptioner.core.utils.path_utils import sanitize_filename_component
 
 logger = setup_logger("video_download_thread")
 
@@ -58,59 +58,12 @@ class VideoDownloadThread(QThread):
 
     def sanitize_filename(self, name: str, replacement: str = "_") -> str:
         """清理文件名中不允许的字符"""
-        # 定义不允许的字符
-        forbidden_chars = r'<>:"/\\|?*'
-
-        # 替换不允许的字符
-        sanitized = re.sub(f"[{re.escape(forbidden_chars)}]", replacement, name)
-
-        # 移除控制字符
-        sanitized = re.sub(r"[\0-\31]", "", sanitized)
-
-        # 去除文件名末尾的空格和点
-        sanitized = sanitized.rstrip(" .")
-
-        # 限制文件名长度
-        max_length = 255
-        if len(sanitized) > max_length:
-            base, ext = os.path.splitext(sanitized)
-            base_max_length = max_length - len(ext)
-            sanitized = base[:base_max_length] + ext
-
-        # 处理Windows保留名称
-        windows_reserved_names = {
-            "CON",
-            "PRN",
-            "AUX",
-            "NUL",
-            "COM1",
-            "COM2",
-            "COM3",
-            "COM4",
-            "COM5",
-            "COM6",
-            "COM7",
-            "COM8",
-            "COM9",
-            "LPT1",
-            "LPT2",
-            "LPT3",
-            "LPT4",
-            "LPT5",
-            "LPT6",
-            "LPT7",
-            "LPT8",
-            "LPT9",
-        }
-        name_without_ext = os.path.splitext(sanitized)[0].upper()
-        if name_without_ext in windows_reserved_names:
-            sanitized = f"{sanitized}_"
-
-        # 如果文件名为空，返回默认名称
-        if not sanitized:
-            sanitized = "default_filename"
-
-        return sanitized
+        return sanitize_filename_component(
+            name,
+            replacement=replacement,
+            max_length=120,
+            fallback="default_filename",
+        )
 
     def download(self, need_subtitle: bool = True, need_thumbnail: bool = False):
         """下载视频"""
@@ -119,7 +72,7 @@ class VideoDownloadThread(QThread):
         # 初始化 ydl 选项
         initial_ydl_opts = {
             "outtmpl": {
-                "default": "%(title).200s.%(ext)s",  # 限制文件名最长200个字符
+                "default": "%(title).120s.%(ext)s",
                 "subtitle": "【下载字幕】.%(ext)s",
                 "thumbnail": "thumbnail",
             },

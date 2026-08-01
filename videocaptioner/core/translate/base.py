@@ -1,6 +1,7 @@
 """翻译器基类"""
 
 import atexit
+import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, List, Optional
@@ -8,6 +9,7 @@ from typing import Callable, List, Optional
 from videocaptioner.core.asr.asr_data import ASRData, ASRDataSeg
 from videocaptioner.core.entities import SubtitleProcessData
 from videocaptioner.core.translate.types import TargetLanguage
+from videocaptioner.core.utils.chinese_script import normalize_translated_script
 from videocaptioner.core.utils.cache import generate_cache_key, get_translate_cache
 from videocaptioner.core.utils.logger import setup_logger
 
@@ -73,7 +75,21 @@ class BaseTranslator(ABC):
                 asr_data.segments, translated_list
             )
 
-            return ASRData(new_segments)
+            missing = [
+                str(i)
+                for i, seg in enumerate(new_segments, 1)
+                if seg.text.strip() and not seg.translated_text.strip()
+            ]
+            if missing:
+                preview = ", ".join(missing[:10])
+                suffix = "..." if len(missing) > 10 else ""
+                raise RuntimeError(
+                    f"翻译不完整：{len(missing)} 条字幕没有译文（序号 {preview}{suffix}），"
+                    "已停止输出，避免用原文冒充译文。请检查网络后重试。"
+                )
+
+            asr_data = ASRData(new_segments)
+            return normalize_translated_script(asr_data, self.target_language)
         except Exception as e:
             logger.error(f"Translation failed: {str(e)}")
             raise RuntimeError(f"Translation failed: {str(e)}")
@@ -116,8 +132,8 @@ class BaseTranslator(ABC):
             fail_rate = failed_count / total_segments
             if fail_rate >= 0.5:
                 raise RuntimeError(
-                    f"Translation failed: {failed_count}/{total_segments} segments failed "
-                    f"({fail_rate:.0%}). Check your API key and network connection."
+                    f"翻译不完整：{failed_count}/{total_segments} 条字幕翻译失败 "
+                    f"({fail_rate:.0%})。已停止输出，请检查网络或翻译服务后重试。"
                 )
             elif failed_count > 0:
                 logger.warning(f"Translation partially failed: {failed_count}/{total_segments} segments")
@@ -144,15 +160,49 @@ class BaseTranslator(ABC):
                 cached_result = None
                 self._cache.delete(cache_key)
             if cached_result is not None:
-                return cached_result
+                cached_missing = [
+                    data.index
+                    for data in cached_result
+                    if data.original_text.strip() and not data.translated_text.strip()
+                ]
+                if not cached_missing:
+                    return cached_result
+                logger.warning(
+                    "Discarding incomplete translation cache for segments: "
+                    f"{cached_missing}"
+                )
+                self._cache.delete(cache_key)
 
-            result = self._translate_chunk(chunk)
+            last_error: Optional[Exception] = None
+            for attempt in range(1, 4):
+                try:
+                    result = self._translate_chunk(chunk)
+                    missing = [
+                        data.index
+                        for data in result
+                        if data.original_text.strip()
+                        and not data.translated_text.strip()
+                    ]
+                    if missing:
+                        raise RuntimeError(
+                            f"Missing translated text for segments: {missing}"
+                        )
 
-            if self.update_callback:
-                self.update_callback(result)
+                    if self.update_callback:
+                        self.update_callback(result)
 
-            self._cache.set(cache_key, result, expire=86400 * 7)
-            return result
+                    self._cache.set(cache_key, result, expire=86400 * 7)
+                    return result
+                except Exception as e:
+                    last_error = e
+                    if attempt < 3:
+                        logger.warning(
+                            f"Translation attempt {attempt}/3 failed: {e}; retrying"
+                        )
+                        time.sleep(0.5 * attempt)
+
+            assert last_error is not None
+            raise last_error
 
         except Exception as e:
             logger.exception(f"Translation failed: {str(e)}")

@@ -59,7 +59,9 @@ class SubtitleStyle:
     back_color: str = "#00000037"
     border_style: int = 3
     shadow: float = 0.0
-    bold: bool = False
+    # Embedded ASS styles reliably support regular (0) and bold (-1). Numeric
+    # 500 is interpreted as bold by some libass paths, causing mixed weights.
+    bold: bool | int = False
     spacing: float = 0.0
     margin_horizontal: int = 20
     margin_bottom: int = 58
@@ -84,7 +86,10 @@ class SubtitleStyle:
         primary = _hex_to_ass(self.primary_color)
         outline = _hex_to_ass(self.outline_color)
         back = _hex_to_ass(self.back_color)
-        bold_flag = -1 if self.bold else 0
+        if isinstance(self.bold, bool):
+            bold_flag = -1 if self.bold else 0
+        else:
+            bold_flag = max(100, min(900, int(self.bold))) if self.bold else 0
 
         sec = self.secondary or SecondaryStyle(
             font_name=self.font_name,
