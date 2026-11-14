@@ -20,17 +20,18 @@ AI-powered video captioning: transcribe speech → optimize subtitles → transl
 
 **Always run `videocaptioner <command> --help` first** to check the latest options and defaults before executing a command. The examples below are common patterns, but --help is the source of truth.
 
-- Install: `pip install videocaptioner`
+- Install from the [momo repository](https://github.com/ckbenimaru/momovideo-translator) with `uv sync`. Run the CLI as `uv run videocaptioner` from the checkout (or activate its environment for the examples below).
 - FFmpeg required for video synthesis (`brew install ffmpeg` on macOS)
-- **Free (no API key):** transcription (bijian/jianying), translation (Bing/Google)
-- **Requires LLM API key:** subtitle optimization, subtitle re-segmentation, LLM translation. Set via `OPENAI_API_KEY` env var or `--api-key` flag
+- **Local and offline after setup:** Open the installed momo app from Finder on macOS, or use `uv run videocaptioner-gui`. On Apple Silicon use Qwen3-ASR (MLX) and local Ollama for translation. In the CLI, `--asr whisper-cpp` uses an installed local executable and model.
+- **Online, no API key:** `bijian` and `jianying` upload audio to their transcription services. Bing and Google send subtitle text to their translation services. Use these examples only when the user requests an online service or authorizes sending the relevant data.
+- CLI LLM optimization and translation require endpoint, model and key settings. Local Ollama uses its local endpoint and a placeholder key. Hosted LLM services receive subtitle text and relevant context.
 
 ## Common scenarios
 
 ### 1. Give a Chinese video English subtitles (one command, all free)
 
 ```bash
-videocaptioner process video.mp4 --asr bijian --translator bing --target-language en \
+videocaptioner process video.mp4 --asr bijian --no-optimize --translator bing --target-language en \
   --subtitle-mode hard --quality high -o output.mp4
 ```
 
@@ -47,7 +48,7 @@ videocaptioner transcribe video.mp4 --asr bijian --format json -o ./subtitles/
 
 ```bash
 # Free Bing → English, bilingual output with translation above original
-videocaptioner subtitle input.srt --translator bing --target-language en --layout target-above -o translated.srt
+videocaptioner subtitle input.srt --no-optimize --translator bing --target-language en --layout target-above -o translated.srt
 
 # Free Google → Japanese, translation only (discard original text)
 videocaptioner subtitle input.srt --translator google --target-language ja --no-optimize --layout target-only -o output_ja.srt
@@ -61,15 +62,15 @@ videocaptioner subtitle input.srt --translator llm --target-language en --reflec
 
 ```bash
 # Anime-style subtitles (warm color + orange outline), high quality video
-videocaptioner process video.mp4 --asr bijian --translator bing --target-language ja \
+videocaptioner process video.mp4 --asr bijian --no-optimize --translator bing --target-language ja \
   --subtitle-mode hard --style anime --quality high -o output_ja.mp4
 
 # Modern rounded background subtitles
-videocaptioner process video.mp4 --asr bijian --translator google --target-language ko \
+videocaptioner process video.mp4 --asr bijian --no-optimize --translator google --target-language ko \
   --subtitle-mode hard --render-mode rounded -o output_ko.mp4
 
 # Custom colors: white text with red outline, ultra quality
-videocaptioner process video.mp4 --asr bijian --translator bing --target-language en \
+videocaptioner process video.mp4 --asr bijian --no-optimize --translator bing --target-language en \
   --subtitle-mode hard --quality ultra \
   --style-override '{"outline_color": "#ff0000", "primary_color": "#ffffff"}' -o output_en.mp4
 ```
@@ -77,7 +78,7 @@ videocaptioner process video.mp4 --asr bijian --translator bing --target-languag
 ### 5. Subtitle only, output as ASS format (no video synthesis)
 
 ```bash
-videocaptioner process video.mp4 --asr bijian --translator bing --target-language en \
+videocaptioner process video.mp4 --asr bijian --no-optimize --translator bing --target-language en \
   --format ass --no-synthesize -o ./output/
 ```
 
@@ -88,7 +89,7 @@ videocaptioner process video.mp4 --asr bijian --translator bing --target-languag
 videocaptioner transcribe video.mp4 --asr bijian -o video.srt
 
 # Step 2: Translate (bilingual, original text above translation)
-videocaptioner subtitle video.srt --translator bing --target-language en --layout source-above -o video_en.srt
+videocaptioner subtitle video.srt --no-optimize --translator bing --target-language en --layout source-above -o video_en.srt
 
 # Step 3: Burn into video with rounded background, high quality
 videocaptioner synthesize video.mp4 -s video_en.srt --subtitle-mode hard \
@@ -98,7 +99,7 @@ videocaptioner synthesize video.mp4 -s video_en.srt --subtitle-mode hard \
 ### 7. Process audio file (auto-skips video synthesis)
 
 ```bash
-videocaptioner process podcast.mp3 --asr bijian --translator bing --target-language en -o ./output/
+videocaptioner process podcast.mp3 --asr bijian --no-optimize --translator bing --target-language en -o ./output/
 ```
 
 ### 8. Transcribe other languages (whisper-api)

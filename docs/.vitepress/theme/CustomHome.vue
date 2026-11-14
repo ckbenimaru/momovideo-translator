@@ -6,7 +6,7 @@
       <div class="container">
         <div class="hero-content">
           <div class="hero-badge">
-            <span class="badge-emoji">🎬</span>
+            <img class="badge-logo" :src="withBase('/logo.png')" alt="" width="22" height="22">
             开源免费 · 用心打造
           </div>
           <h1 class="hero-title">
@@ -25,7 +25,7 @@
             <span class="stat-inline">🌍 支持99种语言</span>
           </div>
           <div class="hero-actions">
-            <a href="/guide/getting-started" class="btn-primary">
+            <a :href="withBase('/guide/getting-started')" class="btn-primary">
               <span>立即开始</span>
               <span class="btn-arrow">→</span>
             </a>
@@ -105,7 +105,7 @@
               <div class="feature-icon">💝</div>
             </div>
             <h3 class="feature-title">完全免费，永久开源</h3>
-            <p class="feature-desc">MIT 协议，代码透明。你的数据在本地，隐私完全掌控在自己手里</p>
+            <p class="feature-desc">GPL-3.0 协议，代码透明。你的数据在本地，隐私完全掌控在自己手里</p>
           </div>
           <div class="feature-card">
             <div class="feature-icon-wrap">
@@ -136,11 +136,11 @@
             有问题随时在 GitHub 提 Issue，社区会帮你
           </p>
           <div class="cta-buttons">
-            <a href="/guide/getting-started" class="btn-cta-primary">
+            <a :href="withBase('/guide/getting-started')" class="btn-cta-primary">
               <span>开始使用</span>
               <span class="btn-arrow">→</span>
             </a>
-            <a href="/guide/faq" class="btn-cta-secondary">
+            <a :href="withBase('/guide/faq')" class="btn-cta-secondary">
               <span>看看常见问题</span>
             </a>
           </div>
@@ -151,6 +151,7 @@
 </template>
 
 <script setup>
+import { withBase } from 'vitepress'
 </script>
 
 <style scoped>
@@ -227,8 +228,8 @@
   border-color: var(--vc-green-primary);
 }
 
-.badge-emoji {
-  font-size: 1.1rem;
+.badge-logo {
+  object-fit: contain;
 }
 
 .hero-title {

@@ -21,8 +21,8 @@ from qfluentwidgets import (
 from videocaptioner.config import SETTINGS_PATH, WORK_PATH
 from videocaptioner.core.entities import (
     FasterWhisperModelEnum,
-    Qwen3ASRModelEnum,
     LLMServiceEnum,
+    Qwen3ASRModelEnum,
     SubtitleLayoutEnum,
     SubtitleRenderModeEnum,
     TranscribeLanguageEnum,
@@ -34,7 +34,11 @@ from videocaptioner.core.entities import (
     WhisperModelEnum,
 )
 from videocaptioner.core.translate.types import TargetLanguage
-from videocaptioner.core.utils.platform_utils import get_available_transcribe_models
+from videocaptioner.core.utils.platform_utils import (
+    get_available_transcribe_models,
+    is_apple_silicon,
+    is_macos,
+)
 
 
 class Language(Enum):
@@ -57,7 +61,7 @@ class LanguageSerializer(ConfigSerializer):
 
 
 class PlatformAwareTranscribeModelValidator(OptionsValidator):
-    """平台相关的转录模型验证器，在 macOS 上自动过滤掉 FasterWhisper"""
+    """限制转录模型为当前平台支持的选项。"""
 
     def __init__(self):
         # 不调用父类的 __init__，因为我们要自定义 options
@@ -71,7 +75,9 @@ class PlatformAwareTranscribeModelValidator(OptionsValidator):
         return value in self._options
 
     def correct(self, value):
-        return value if self.validate(value) else self._options[0]
+        if self.validate(value):
+            return value
+        return TranscribeModelEnum.WHISPER_CPP if is_macos() else self._options[0]
 
 
 class Config(QConfig):
@@ -149,7 +155,7 @@ class Config(QConfig):
     transcribe_model = OptionsConfigItem(
         "Transcribe",
         "TranscribeModel",
-        TranscribeModelEnum.QWEN3_ASR,
+        TranscribeModelEnum.WHISPER_CPP if is_macos() else TranscribeModelEnum.QWEN3_ASR,
         PlatformAwareTranscribeModelValidator(),
         EnumSerializer(TranscribeModelEnum),
     )
@@ -265,7 +271,10 @@ class Config(QConfig):
         "Qwen3ASR", "UseForcedAligner", True, BoolValidator()
     )
     qwen_device = OptionsConfigItem(
-        "Qwen3ASR", "Device", "cuda", OptionsValidator(["cuda", "cpu"])
+        "Qwen3ASR",
+        "Device",
+        "mlx" if is_apple_silicon() else "cuda",
+        OptionsValidator(["mlx"] if is_apple_silicon() else ["cuda", "cpu"]),
     )
     qwen_chunk_seconds = ConfigItem(
         "Qwen3ASR", "ChunkSeconds", 30, RangeValidator(30, 240)

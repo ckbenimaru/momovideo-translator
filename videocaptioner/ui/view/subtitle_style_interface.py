@@ -3,9 +3,9 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from PIL import ImageFont
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QFontDatabase
-from PyQt5.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QColor, QFontDatabase, QImage
+from PyQt5.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
@@ -26,6 +26,7 @@ from videocaptioner.core.entities import SubtitleLayoutEnum, SubtitleRenderModeE
 from videocaptioner.core.subtitle import get_builtin_fonts, render_ass_preview, render_preview
 from videocaptioner.core.subtitle.style_manager import StyleMode
 from videocaptioner.core.subtitle.styles import RoundedBgStyle
+from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.platform_utils import open_folder
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.common.signal_bus import signalBus
@@ -35,6 +36,7 @@ from videocaptioner.ui.components.MySettingCard import (
     DoubleSpinBoxSettingCard,
     SpinBoxSettingCard,
 )
+from videocaptioner.ui.task_factory import TaskFactory
 
 PERVIEW_TEXTS = {
     "长文本": (
@@ -59,11 +61,13 @@ DEFAULT_BG_PORTRAIT = {
     "height": 852,
 }
 
+logger = setup_logger("subtitle_style_interface")
+
 
 class AssPreviewThread(QThread):
     """ASS 样式预览线程"""
 
-    previewReady = pyqtSignal(str)
+    previewReady = pyqtSignal(QImage)
 
     def __init__(
         self,
@@ -81,20 +85,23 @@ class AssPreviewThread(QThread):
         self.bg_image_path = bg_image_path
 
     def run(self):
-        preview_path = render_ass_preview(
-            style_str=self.style_str,
-            preview_text=self.preview_text,
-            bg_image_path=self.bg_image_path,
-            width=self.width,
-            height=self.height,
-        )
-        self.previewReady.emit(preview_path)
+        try:
+            preview_path = render_ass_preview(
+                style_str=self.style_str,
+                preview_text=self.preview_text,
+                bg_image_path=self.bg_image_path,
+                width=self.width,
+                height=self.height,
+            )
+            self.previewReady.emit(QImage(preview_path))
+        except Exception:
+            logger.exception("Could not render ASS subtitle preview")
 
 
 class RoundedBgPreviewThread(QThread):
     """圆角背景预览线程"""
 
-    previewReady = pyqtSignal(str)
+    previewReady = pyqtSignal(QImage)
 
     def __init__(
         self,
@@ -113,15 +120,22 @@ class RoundedBgPreviewThread(QThread):
         self.bg_image_path = bg_image_path
 
     def run(self):
-        preview_path = render_preview(
-            primary_text=self.primary_text,
-            secondary_text=self.secondary_text,
-            width=self.width,
-            height=self.height,
-            style=self.style,
-            bg_image_path=self.bg_image_path,
-        )
-        self.previewReady.emit(preview_path)
+        try:
+            preview_path = render_preview(
+                primary_text=self.primary_text,
+                secondary_text=self.secondary_text,
+                width=self.width,
+                height=self.height,
+                style=self.style,
+                bg_image_path=self.bg_image_path,
+            )
+            try:
+                image = QImage(preview_path)
+            finally:
+                Path(preview_path).unlink(missing_ok=True)
+            self.previewReady.emit(image)
+        except Exception:
+            logger.exception("Could not render rounded subtitle preview")
 
 
 class SubtitleStyleInterface(QWidget):
@@ -143,6 +157,12 @@ class SubtitleStyleInterface(QWidget):
 
         # 控制是否触发样式变更回调（加载样式时禁用）
         self._loading_style = False
+        self.preview_thread: AssPreviewThread | RoundedBgPreviewThread | None = None
+        self._preview_pending = False
+        self._preview_stopping = False
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stopPreview)
 
         # 设置初始值,加载样式
         self.__setValues()
@@ -565,10 +585,14 @@ class SubtitleStyleInterface(QWidget):
         self.assSecondaryFontCard.comboBox.setMaxVisibleItems(12)
 
         # 圆角背景模式字体
-        self.roundedFontCard.addItems(all_fonts)
+        self.roundedFontCard.comboBox.addItem(self.tr("自動選擇"), userData="")
+        for font_name in dict.fromkeys(all_fonts):
+            self.roundedFontCard.comboBox.addItem(font_name, userData=font_name)
         self.roundedFontCard.comboBox.setMaxVisibleItems(12)
 
         # 设置圆角背景模式的初始值
+        font_index = self.roundedFontCard.comboBox.findData(cfg.get(cfg.rounded_bg_font_name))
+        self.roundedFontCard.setCurrentIndex(max(0, font_index))
         self.roundedFontSizeCard.spinBox.setValue(cfg.get(cfg.rounded_bg_font_size))
         self.roundedCornerRadiusCard.spinBox.setValue(
             cfg.get(cfg.rounded_bg_corner_radius)
@@ -722,30 +746,7 @@ class SubtitleStyleInterface(QWidget):
         if self._loading_style:
             return
 
-        # 保存圆角背景配置
-        cfg.set(cfg.rounded_bg_font_name, self.roundedFontCard.comboBox.currentText())
-        cfg.set(cfg.rounded_bg_font_size, self.roundedFontSizeCard.spinBox.value())
-        cfg.set(
-            cfg.rounded_bg_corner_radius, self.roundedCornerRadiusCard.spinBox.value()
-        )
-        cfg.set(cfg.rounded_bg_padding_h, self.roundedPaddingHCard.spinBox.value())
-        cfg.set(cfg.rounded_bg_padding_v, self.roundedPaddingVCard.spinBox.value())
-        cfg.set(
-            cfg.rounded_bg_margin_bottom, self.roundedMarginBottomCard.spinBox.value()
-        )
-        cfg.set(
-            cfg.rounded_bg_line_spacing, self.roundedLineSpacingCard.spinBox.value()
-        )
-        cfg.set(
-            cfg.rounded_bg_letter_spacing, self.roundedLetterSpacingCard.spinBox.value()
-        )
-
-        # 保存颜色
-        text_color = self.roundedTextColorCard.colorPicker.color.name()
-        cfg.set(cfg.rounded_bg_text_color, text_color)
-        bg_color = self.roundedBgColorCard.colorPicker.color
-        bg_color_hex = f"#{bg_color.red():02x}{bg_color.green():02x}{bg_color.blue():02x}{bg_color.alpha():02x}"
-        cfg.set(cfg.rounded_bg_color, bg_color_hex)
+        self._saveRoundedBgSettings()
 
         # 自动保存当前样式
         current_style = self.styleNameComboBox.comboBox.currentText()
@@ -753,6 +754,30 @@ class SubtitleStyleInterface(QWidget):
             self.saveStyle(current_style)
 
         self.updatePreview()
+
+    def _saveRoundedBgSettings(self):
+        text_color = self.roundedTextColorCard.colorPicker.color.name()
+        bg_color = self.roundedBgColorCard.colorPicker.color
+        bg_color_hex = f"#{bg_color.red():02x}{bg_color.green():02x}{bg_color.blue():02x}{bg_color.alpha():02x}"
+        settings = (
+            (cfg.rounded_bg_font_name, self.roundedFontCard.comboBox.currentData()),
+            (cfg.rounded_bg_font_size, self.roundedFontSizeCard.spinBox.value()),
+            (cfg.rounded_bg_corner_radius, self.roundedCornerRadiusCard.spinBox.value()),
+            (cfg.rounded_bg_padding_h, self.roundedPaddingHCard.spinBox.value()),
+            (cfg.rounded_bg_padding_v, self.roundedPaddingVCard.spinBox.value()),
+            (cfg.rounded_bg_margin_bottom, self.roundedMarginBottomCard.spinBox.value()),
+            (cfg.rounded_bg_line_spacing, self.roundedLineSpacingCard.spinBox.value()),
+            (cfg.rounded_bg_letter_spacing, self.roundedLetterSpacingCard.spinBox.value()),
+            (cfg.rounded_bg_text_color, text_color),
+            (cfg.rounded_bg_color, bg_color_hex),
+        )
+        changed = False
+        for item, value in settings:
+            if value != item.value:
+                cfg.set(item, value, save=False)
+                changed = True
+        if changed:
+            cfg.save()
 
     def _updateVisibleGroups(self):
         """根据渲染模式显示/隐藏设置组"""
@@ -915,6 +940,13 @@ class SubtitleStyleInterface(QWidget):
 
     def updatePreview(self):
         """更新预览图片"""
+        if self._preview_stopping:
+            return
+        # Keep ownership until Qt delivers finished, even if run() has returned.
+        if self.preview_thread is not None:
+            self._preview_pending = True
+            return
+
         # 获取预览文本
         main_text, sub_text = PERVIEW_TEXTS[self.previewTextCard.comboBox.currentText()]
 
@@ -947,21 +979,7 @@ class SubtitleStyleInterface(QWidget):
 
         if render_mode == SubtitleRenderModeEnum.ROUNDED_BG:
             # 圆角背景模式（样式720P基准，由渲染层自动缩放）
-            bg_color = self.roundedBgColorCard.colorPicker.color
-            bg_color_hex = f"#{bg_color.red():02x}{bg_color.green():02x}{bg_color.blue():02x}{bg_color.alpha():02x}"
-
-            style = RoundedBgStyle(
-                font_name=self.roundedFontCard.comboBox.currentText(),
-                font_size=self.roundedFontSizeCard.spinBox.value(),
-                bg_color=bg_color_hex,
-                text_color=self.roundedTextColorCard.colorPicker.color.name(),
-                corner_radius=self.roundedCornerRadiusCard.spinBox.value(),
-                padding_h=self.roundedPaddingHCard.spinBox.value(),
-                padding_v=self.roundedPaddingVCard.spinBox.value(),
-                margin_bottom=self.roundedMarginBottomCard.spinBox.value(),
-                line_spacing=self.roundedLineSpacingCard.spinBox.value(),
-                letter_spacing=self.roundedLetterSpacingCard.spinBox.value(),
-            )
+            style = RoundedBgStyle(**TaskFactory.get_rounded_style())
 
             self.preview_thread = RoundedBgPreviewThread(
                 preview_text=(main_text, sub_text),
@@ -978,12 +996,30 @@ class SubtitleStyleInterface(QWidget):
             )
 
         self.preview_thread.previewReady.connect(self.onPreviewReady)
+        self.preview_thread.finished.connect(self._onPreviewFinished)
         self.preview_thread.start()
 
-    def onPreviewReady(self, preview_path):
+    @pyqtSlot(QImage)
+    def onPreviewReady(self, image: QImage):
         """预览图片生成完成的回调"""
-        self.previewImage.setImage(preview_path)
+        if self._preview_pending or self._preview_stopping or image.isNull():
+            return
+        self.previewImage.setImage(image)
         self.updatePreviewImage()
+
+    @pyqtSlot()
+    def _onPreviewFinished(self):
+        self.preview_thread = None
+        if self._preview_pending:
+            self._preview_pending = False
+            self.updatePreview()
+
+    @pyqtSlot()
+    def _stopPreview(self):
+        self._preview_stopping = True
+        self._preview_pending = False
+        if self.preview_thread is not None:
+            self.preview_thread.wait()
 
     def updatePreviewImage(self):
         """更新预览图片"""
@@ -1026,6 +1062,7 @@ class SubtitleStyleInterface(QWidget):
         mode = self._getCurrentRenderMode()
         if mode == SubtitleRenderModeEnum.ROUNDED_BG:
             self._loadRoundedBgStyle(style_path)
+            self._saveRoundedBgSettings()
         else:
             self._loadAssStyle(style_path)
 
@@ -1074,7 +1111,8 @@ class SubtitleStyleInterface(QWidget):
             data = json.load(f)
 
         if "font_name" in data:
-            self.roundedFontCard.setCurrentText(data["font_name"])
+            font_index = self.roundedFontCard.comboBox.findData(data["font_name"])
+            self.roundedFontCard.setCurrentIndex(max(0, font_index))
         if "font_size" in data:
             self.roundedFontSizeCard.spinBox.setValue(data["font_size"])
         if "text_color" in data:
@@ -1185,7 +1223,7 @@ class SubtitleStyleInterface(QWidget):
             "name": style_id_from_filename(style_path.name),
             "description": "",
             "mode": "rounded",
-            "font_name": self.roundedFontCard.comboBox.currentText(),
+            "font_name": self.roundedFontCard.comboBox.currentData(),
             "font_size": self.roundedFontSizeCard.spinBox.value(),
             "text_color": self.roundedTextColorCard.colorPicker.color.name(),
             "bg_color": bg_color_hex,

@@ -2,7 +2,6 @@ import hashlib
 import re
 import unicodedata
 
-
 WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",

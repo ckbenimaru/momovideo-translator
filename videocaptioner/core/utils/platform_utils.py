@@ -135,19 +135,7 @@ def get_available_transcribe_models() -> list[TranscribeModelEnum]:
     Returns:
         list[TranscribeModelEnum]: 可用的转录模型列表
     """
-    all_models = list(TranscribeModelEnum)
-
-    # macOS 上过滤掉 CUDA-only local engines. The 1.7B ASR plus aligner is not
-    # supported on the 8 GB Apple Silicon target used by this portable build.
-    if is_macos():
-        return [
-            model
-            for model in all_models
-            if model
-            not in {TranscribeModelEnum.FASTER_WHISPER, TranscribeModelEnum.QWEN3_ASR}
-        ]
-
-    return all_models
+    return [model for model in TranscribeModelEnum if is_model_available(model)]
 
 
 def is_model_available(model: TranscribeModelEnum) -> bool:
@@ -160,11 +148,13 @@ def is_model_available(model: TranscribeModelEnum) -> bool:
     Returns:
         bool: 如果模型可用返回 True，否则返回 False
     """
-    # FasterWhisper 在 macOS 上不可用
-    if is_macos() and model in {
-        TranscribeModelEnum.FASTER_WHISPER,
-        TranscribeModelEnum.QWEN3_ASR,
-    }:
-        return False
-
+    if is_macos():
+        if model is TranscribeModelEnum.FASTER_WHISPER:
+            return False
+        if model is TranscribeModelEnum.QWEN3_ASR:
+            return is_apple_silicon()
     return True
+
+
+def is_apple_silicon() -> bool:
+    return is_macos() and platform.machine() == "arm64"

@@ -7,7 +7,27 @@ import pytest
 
 from tests.test_thread.conftest import run_thread_with_timeout
 from videocaptioner.core.entities import SynthesisConfig, SynthesisTask
+from videocaptioner.ui.task_factory import TaskFactory
 from videocaptioner.ui.thread.video_synthesis_thread import VideoSynthesisThread
+
+
+def test_mov_synthesis_defaults_to_mp4(tmp_path):
+    video_path = str(tmp_path / "clip.MOV")
+    expected = str(tmp_path / "clip.done.mp4")
+    assert TaskFactory.create_synthesis_task(video_path, "clip.srt").output_path == expected
+    assert TaskFactory.create_full_process_task(video_path).output_path == expected
+
+
+def test_matching_mov_and_mp4_stems_have_distinct_outputs(tmp_path):
+    mov, mp4 = tmp_path / "clip.MOV", tmp_path / "clip.mp4"
+    mov.touch()
+    mp4.touch()
+    assert TaskFactory.create_synthesis_task(str(mov), "clip.srt").output_path == str(
+        tmp_path / "clip.mov.done.mp4"
+    )
+    assert TaskFactory.create_synthesis_task(str(mp4), "clip.srt").output_path == str(
+        tmp_path / "clip.done.mp4"
+    )
 
 
 @pytest.mark.integration

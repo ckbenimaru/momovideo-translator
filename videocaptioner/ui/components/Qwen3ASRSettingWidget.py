@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import (
     ComboBoxSettingCard,
@@ -17,10 +17,13 @@ from qfluentwidgets import FluentIcon as FIF
 
 from videocaptioner.core.asr.qwen3_asr import (
     QWEN_ALIGNER_DIR_NAME,
+    QWEN_MLX_ALIGNER_REPO,
+    QWEN_MLX_ASR_REPO,
     qwen_runtime_python,
     resolve_qwen_paths,
 )
 from videocaptioner.core.entities import Qwen3ASRModelEnum
+from videocaptioner.core.utils.platform_utils import is_apple_silicon
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.components.LineEditSettingCard import LineEditSettingCard
 from videocaptioner.ui.components.SpinBoxSettingCard import SpinBoxSettingCard
@@ -34,9 +37,11 @@ from videocaptioner.ui.thread.qwen_runtime_thread import (
     validate_qwen_runtime,
 )
 
-
-QWEN_ASR_REPO = "Qwen/Qwen3-ASR-1.7B-hf"
-QWEN_ALIGNER_REPO = "Qwen/Qwen3-ForcedAligner-0.6B-hf"
+QWEN_ASR_REPO = QWEN_MLX_ASR_REPO if is_apple_silicon() else "Qwen/Qwen3-ASR-1.7B-hf"
+QWEN_ALIGNER_REPO = (
+    QWEN_MLX_ALIGNER_REPO if is_apple_silicon() else f"Qwen/{QWEN_ALIGNER_DIR_NAME}"
+)
+ALIGNER_DIRECTORY = QWEN_ALIGNER_REPO.split("/")[-1]
 
 
 def get_qwen_runtime_dir() -> Path:
@@ -100,8 +105,10 @@ class Qwen3ASRSettingWidget(QWidget):
             cfg.qwen_asr_model,
             FIF.ROBOT,
             self.tr("语音识别模型"),
-            self.tr("1.7B：最高准确率，推荐 RTX 4060 8GB 或以上"),
-            [model.value for model in Qwen3ASRModelEnum],
+            self.tr("1.7B：Apple Silicon 8-bit") if is_apple_silicon()
+            else self.tr("1.7B：最高准确率，推荐 RTX 4060 8GB 或以上"),
+            [QWEN_ASR_REPO.split("/")[-1]] if is_apple_silicon()
+            else [model.value for model in Qwen3ASRModelEnum],
             self.model_group,
         )
         self.aligner_card = SwitchSettingCard(
@@ -115,8 +122,9 @@ class Qwen3ASRSettingWidget(QWidget):
             cfg.qwen_device,
             FIF.SPEED_HIGH,
             self.tr("推理设备"),
-            self.tr("RTX 4060 使用 CUDA；CPU 仅作兼容回退"),
-            ["cuda", "cpu"],
+            self.tr("MLX 使用 Apple GPU") if is_apple_silicon()
+            else self.tr("RTX 4060 使用 CUDA；CPU 仅作兼容回退"),
+            cfg.qwen_device.validator.options,
             self.model_group,
         )
         self.chunk_card = SpinBoxSettingCard(
@@ -133,7 +141,7 @@ class Qwen3ASRSettingWidget(QWidget):
             cfg.qwen_runtime_dir,
             FIF.CODE,
             self.tr("独立运行环境"),
-            self.tr("留空使用 momo 数据目录；可改到 D 槽"),
+            self.tr("留空使用 momo 数据目录"),
             str(get_qwen_runtime_dir()),
             self.path_group,
         )
@@ -151,7 +159,8 @@ class Qwen3ASRSettingWidget(QWidget):
             self.tr("安装／修复"),
             FIF.DOWNLOAD,
             self.tr("Qwen 推理环境"),
-            self.tr("建立隔离环境并安装 CUDA PyTorch、Transformers 等依赖"),
+            self.tr("建立隔离环境并安装 MLX Audio") if is_apple_silicon()
+            else self.tr("建立隔离环境并安装 CUDA PyTorch、Transformers 等依赖"),
             self.install_group,
         )
         self.asr_download_card = PushSettingCard(
@@ -209,7 +218,7 @@ class Qwen3ASRSettingWidget(QWidget):
             lambda: self.download_model(QWEN_ASR_REPO, QWEN_ASR_REPO.split("/")[-1])
         )
         self.aligner_download_card.clicked.connect(
-            lambda: self.download_model(QWEN_ALIGNER_REPO, QWEN_ALIGNER_DIR_NAME)
+            lambda: self.download_model(QWEN_ALIGNER_REPO, ALIGNER_DIRECTORY)
         )
         self.refresh_card.clicked.connect(self.refresh_status)
 
@@ -244,7 +253,7 @@ class Qwen3ASRSettingWidget(QWidget):
     def download_model(self, repo_id: str, directory_name: str):
         self._active_card = (
             self.aligner_download_card
-            if directory_name == QWEN_ALIGNER_DIR_NAME
+            if directory_name == ALIGNER_DIRECTORY
             else self.asr_download_card
         )
         self._active_card.setContent(self.tr("正在连接模型仓库，请勿关闭 momo…"))
@@ -296,7 +305,7 @@ class Qwen3ASRSettingWidget(QWidget):
 
     def _refresh_model_status(self):
         asr_path = get_qwen_model_root() / QWEN_ASR_REPO.split("/")[-1]
-        aligner_path = get_qwen_model_root() / QWEN_ALIGNER_DIR_NAME
+        aligner_path = get_qwen_model_root() / ALIGNER_DIRECTORY
         try:
             validate_qwen_model(asr_path)
             self.asr_download_card.setContent(
@@ -317,7 +326,7 @@ class Qwen3ASRSettingWidget(QWidget):
             )
 
     def refresh_status(self):
-        """Refresh model files immediately and validate CUDA in the background."""
+        """Refresh model files immediately and validate the runtime in the background."""
         self._refresh_model_status()
         if (
             self.runtime_check_thread is not None
@@ -331,7 +340,7 @@ class Qwen3ASRSettingWidget(QWidget):
             return
 
         self.runtime_install_card.setContent(
-            self.tr("正在背景檢查 PyTorch／CUDA…")
+            self.tr("正在背景檢查 Qwen 推理環境…")
         )
         self.runtime_check_thread = QwenRuntimeCheckThread(str(runtime_dir))
         self.runtime_check_thread.completed.connect(
@@ -357,7 +366,7 @@ class Qwen3ASRSettingWidget(QWidget):
                 get_qwen_model_root() / QWEN_ASR_REPO.split("/")[-1]
             )
             if cfg.qwen_use_forced_aligner.value:
-                validate_qwen_model(get_qwen_model_root() / QWEN_ALIGNER_DIR_NAME)
+                validate_qwen_model(get_qwen_model_root() / ALIGNER_DIRECTORY)
         except RuntimeError:
             return False
         return True

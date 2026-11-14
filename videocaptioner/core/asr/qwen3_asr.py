@@ -6,11 +6,13 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 from videocaptioner.config import MODEL_PATH, ROOT_PATH
+
 from .asr_data import ASRDataSeg
 from .base import BaseASR
 
-
 QWEN_ALIGNER_DIR_NAME = "Qwen3-ForcedAligner-0.6B-hf"
+QWEN_MLX_ASR_REPO = "mlx-community/Qwen3-ASR-1.7B-8bit"
+QWEN_MLX_ALIGNER_REPO = "mlx-community/Qwen3-ForcedAligner-0.6B-8bit"
 
 
 def default_qwen_runtime_dir() -> Path:
@@ -90,10 +92,14 @@ class Qwen3ASR(BaseASR):
 
     @property
     def asr_model_path(self) -> Path:
+        if self.device == "mlx":
+            return self.model_dir / QWEN_MLX_ASR_REPO.split("/")[-1]
         return self.model_dir / self.asr_model
 
     @property
     def aligner_model_path(self) -> Path:
+        if self.device == "mlx":
+            return self.model_dir / QWEN_MLX_ALIGNER_REPO.split("/")[-1]
         return self.model_dir / QWEN_ALIGNER_DIR_NAME
 
     def _validate_installation(self) -> Path:
@@ -200,7 +206,7 @@ class Qwen3ASR(BaseASR):
                 self.language,
                 self.device,
                 str(self.chunk_seconds),
-                "mixed-language-v1",
+                "mlx-alignment-v3" if self.device == "mlx" else "mixed-language-v1",
             ]
         )
 

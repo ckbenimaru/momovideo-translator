@@ -214,8 +214,6 @@ class SubtitleOptimizer:
             {"role": "user", "content": user_prompt},
         ]
 
-        last_result = None
-
         # Agent loop
         for step in range(MAX_STEPS):
             # 调用LLM
@@ -237,7 +235,6 @@ class SubtitleOptimizer:
                 )
 
             result_dict: Dict[str, str] = parsed_result
-            last_result = result_dict
 
             # 验证结果
             is_valid, error_message = self._validate_optimization_result(
@@ -263,12 +260,8 @@ class SubtitleOptimizer:
             )
 
         # 达到最大步数
-        logger.warning(f"Max attempts reached({MAX_STEPS})，returning last result")
-        return (
-            self._repair_subtitle(subtitle_chunk, last_result)
-            if last_result
-            else subtitle_chunk
-        )
+        logger.warning("字幕校正未通過檢查，保留該批原文")
+        return subtitle_chunk
 
     def _validate_optimization_result(
         self, original_chunk: Dict[str, str], optimized_chunk: Dict[str, str]
@@ -311,6 +304,8 @@ class SubtitleOptimizer:
         for key in expected_keys:
             original_text = original_chunk[key]
             optimized_text = optimized_chunk[key]
+            if not isinstance(optimized_text, str) or not optimized_text.strip():
+                return False, f"Key '{key}': return a non-empty corrected subtitle."
 
             # 清理文本用于比较
             original_cleaned = re.sub(r"\s+", " ", original_text).strip()

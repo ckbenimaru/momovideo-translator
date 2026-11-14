@@ -4,9 +4,9 @@
 
 ## 📚 在线查看
 
-文档已自动部署到 GitHub Pages：
+仓库启用 GitHub Pages 后，文档可从以下地址访问：
 
-**[https://weifeng2333.github.io/VideoCaptioner/](https://weifeng2333.github.io/VideoCaptioner/)**
+**[https://ckbenimaru.github.io/momovideo-translator/](https://ckbenimaru.github.io/momovideo-translator/)**
 
 ## 🚀 本地开发
 
@@ -153,7 +153,7 @@ head:
 1. **Google Search Console**
    - 访问 https://search.google.com/search-console
    - 添加网站并验证
-   - 提交 sitemap: `https://weifeng2333.github.io/VideoCaptioner/sitemap.xml`
+   - 提交 sitemap: `https://ckbenimaru.github.io/momovideo-translator/sitemap.xml`
 
 2. **Bing Webmaster Tools**
    - 访问 https://www.bing.com/webmasters

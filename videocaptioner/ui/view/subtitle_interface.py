@@ -3,10 +3,12 @@ import json
 import os
 import sys
 import tempfile
+from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, QTime, pyqtSignal
+from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, QThread, QTime, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QCloseEvent, QColor, QDragEnterEvent, QDropEvent, QKeyEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -47,9 +49,10 @@ from videocaptioner.core.entities import (
     SubtitleLayoutEnum,
     SubtitleTask,
     SupportedSubtitleFormats,
+    SupportedVideoFormats,
 )
 from videocaptioner.core.subtitle import get_subtitle_style
-from videocaptioner.core.translate.types import TargetLanguage
+from videocaptioner.core.translate.types import TargetLanguage, translation_needs_review
 from videocaptioner.core.utils.platform_utils import open_folder, reveal_in_explorer
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.common.signal_bus import signalBus
@@ -195,6 +198,7 @@ class SubtitleTableModel(QAbstractTableModel):
 
 class SubtitleInterface(QWidget):
     finished = pyqtSignal(str, str)
+    ready_to_close = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -202,6 +206,13 @@ class SubtitleInterface(QWidget):
         self.task: Optional[SubtitleTask] = None
         self.subtitle_path: Optional[str] = None
         self.custom_prompt_text: str = cfg.custom_prompt_text.value
+        self.subtitle_optimization_thread: Optional[SubtitleThread] = None
+        self._retranslate_thread: Optional[RetranslateThread] = None
+        self._pending_task: Optional[SubtitleTask] = None
+        self._pending_start = False
+        self._close_pending = False
+        self._reviewing_translation = False
+        self._last_review_save_error = ""
         self.setAttribute(Qt.WA_DeleteOnClose)  # type: ignore
         self._init_ui()
         self._setup_signals()
@@ -216,15 +227,17 @@ class SubtitleInterface(QWidget):
         self._setup_top_layout()
         self._setup_subtitle_table()
         self._setup_bottom_layout()
+        self._setup_translation_review()
 
     def set_values(self):
+        if cfg.subtitle_layout.value is SubtitleLayoutEnum.ONLY_TRANSLATE:
+            cfg.set(cfg.need_translate, True)
         self.layout_button.setText(
             cfg.subtitle_layout.value.value
         )  # Get enum's string value
-        self.translate_button.setChecked(cfg.need_translate.value)
+        self._sync_translation_controls(cfg.need_translate.value)
         self.optimize_button.setChecked(cfg.need_optimize.value)
         self.target_language_button.setText(cfg.target_language.value.value)
-        self.target_language_button.setEnabled(cfg.need_translate.value)
 
     def _setup_top_layout(self):
         # 创建水平布局
@@ -409,8 +422,188 @@ class SubtitleInterface(QWidget):
         signalBus.subtitle_translation_changed.connect(
             self.on_subtitle_translation_changed
         )
+        cfg.need_translate.valueChanged.connect(self._sync_translation_controls)
+        self.model.dataChanged.connect(self._on_translation_review_edit)
         # self.subtitle_setting_button.clicked.connect(self.show_subtitle_settings)
         # self.video_player_button.clicked.connect(self.show_video_player)
+
+    def _setup_translation_review(self) -> None:
+        self._review_panel = QWidget(self)
+        layout = QHBoxLayout(self._review_panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._review_label = BodyLabel(self._review_panel)
+        self._missing_rows_button = TransparentDropDownPushButton(self.tr("跳到待處理"), self._review_panel)
+        self._retry_missing_button = PrimaryPushButton(self.tr("只重譯待處理"), self._review_panel)
+        self._continue_button = PushButton(self.tr("略過核對，前往影片合成"), self._review_panel)
+        self._restart_button = PushButton(self.tr("重新翻譯全部"), self._review_panel)
+        self._retry_missing_button.clicked.connect(self._retry_missing_translations)
+        self._continue_button.clicked.connect(self._continue_to_synthesis)
+        self._restart_button.clicked.connect(self._restart_translation)
+        layout.addWidget(self._review_label, 1)
+        layout.addWidget(self._missing_rows_button)
+        layout.addWidget(self._retry_missing_button)
+        layout.addWidget(self._continue_button)
+        layout.addWidget(self._restart_button)
+        self.main_layout.insertWidget(1, self._review_panel)
+        self._review_panel.hide()
+
+    def _missing_translation_rows(self) -> list[int]:
+        return [
+            index for index, row in enumerate(self.model._data.values())
+            if row["original_subtitle"].strip()
+            and translation_needs_review(row["translated_subtitle"])
+        ]
+
+    def _review_path(self) -> Path:
+        return Path(str(self.subtitle_path) + ".momo-translation.json")
+
+    def _save_translation_review(self) -> bool:
+        if not self._reviewing_translation or not self.subtitle_path:
+            return False
+        path = self._review_path()
+        try:
+            source = Path(self.subtitle_path)
+            payload = {
+                "source_hash": sha256(source.read_bytes()).hexdigest(),
+                "video_path": self.task.video_path if self.task else None,
+                "target": self._review_target.value,
+                "subtitles": self.model._data,
+            }
+            tmp = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=path.parent, delete=False
+                ) as file:
+                    tmp = Path(file.name)
+                    json.dump(payload, file, ensure_ascii=False)
+                tmp.replace(path)
+            finally:
+                if tmp is not None:
+                    tmp.unlink(missing_ok=True)
+            self._last_review_save_error = ""
+            return True
+        except OSError as exc:
+            self._last_review_save_error = str(exc)
+            self._review_label.setToolTip(self._last_review_save_error)
+            self._review_label.setText(self.tr("譯文暫存失敗"))
+            return False
+
+    def _restore_translation_review(self) -> None:
+        self._reviewing_translation = False
+        self._last_review_save_error = ""
+        self._review_panel.hide()
+        try:
+            if not self.subtitle_path:
+                return
+            payload = json.loads(self._review_path().read_text(encoding="utf-8"))
+            if payload["source_hash"] != sha256(Path(self.subtitle_path).read_bytes()).hexdigest():
+                return
+            target = TargetLanguage(payload["target"])
+            data = ASRData.from_json(payload["subtitles"])
+            video_path = payload.get("video_path")
+            if video_path is not None and not isinstance(video_path, str):
+                return
+            if not any(cue.translated_text.strip() for cue in data.segments):
+                return
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return
+        if self.task is None:
+            self.task = TaskFactory.create_subtitle_task(self.subtitle_path, video_path)
+        self._review_target = target
+        self._reviewing_translation = True
+        self.model.update_all(data.to_json())
+        self.status_label.setText(self.tr("已載入暫存譯文"))
+        self._refresh_translation_review()
+
+    def _on_partial_translation(self, data: dict) -> None:
+        self._review_target = self.task.subtitle_config.target_language or cfg.target_language.value
+        self._reviewing_translation = True
+        self.model.update_all(data)
+        self.cancel_button.hide()
+        self.progress_bar.setValue(100)
+        self.status_label.setText(self.tr("翻譯部分完成"))
+        self._refresh_translation_review()
+        self._save_translation_review()
+
+    def _refresh_translation_review(self) -> None:
+        if not self._reviewing_translation:
+            return
+        rows = self._missing_translation_rows()
+        self._review_label.setText(
+            self.tr("譯文暫存失敗") if self._last_review_save_error else (
+                self.tr("翻譯部分完成，{0} 條待處理").format(len(rows))
+                if rows else self.tr("已補齊譯文")
+            )
+        )
+        self._review_label.setToolTip(
+            self._last_review_save_error or self.tr("含「［待確認］」的字幕可再重譯或手動修正。")
+        )
+        menu = RoundMenu(parent=self._missing_rows_button)
+        menu.view.setMaxVisibleItems(10)
+        for row in rows:
+            translation = self.model._data[str(row + 1)]["translated_subtitle"]
+            status = self.tr("待核對") if translation.strip() else self.tr("缺譯")
+            action = Action(text=f"{row + 1} · {status}")
+            action.triggered.connect(lambda checked, index=row: self._jump_to_missing(index))
+            menu.addAction(action)
+        old_menu = self._missing_rows_button.menu()
+        self._missing_rows_button.setMenu(menu)
+        if old_menu is not None:
+            old_menu.deleteLater()
+        self._missing_rows_button.setVisible(bool(rows))
+        self._retry_missing_button.setVisible(bool(rows))
+        self._retry_missing_button.setEnabled(not self._is_processing())
+        self._continue_button.setText(
+            self.tr("略過核對，前往影片合成") if rows else self.tr("前往影片合成")
+        )
+        self._continue_button.setToolTip(
+            self.tr("繼續合成會保留譯文中的「［待確認］」標記。")
+            if any(self.model._data[str(row + 1)]["translated_subtitle"].strip() for row in rows)
+            else ""
+        )
+        self._continue_button.setEnabled(
+            not self._is_processing() and any(
+                row["translated_subtitle"].strip() for row in self.model._data.values()
+            )
+        )
+        self._review_panel.show()
+        self._restart_button.setEnabled(not self._is_processing())
+
+    def _jump_to_missing(self, row: int) -> None:
+        index = self.model.index(row, 3)
+        self.subtitle_table.setCurrentIndex(index)
+        self.subtitle_table.scrollTo(index)
+
+    def _retry_missing_translations(self) -> None:
+        self.retranslate_selected_rows(self._missing_translation_rows())
+
+    def _restart_translation(self) -> None:
+        if self._is_processing():
+            return
+        cfg.set(cfg.need_translate, True)
+        self.start_subtitle_optimization(restart_review=True)
+
+    def _on_translation_review_edit(self, *_args) -> None:
+        if self._reviewing_translation:
+            self._save_translation_review()
+            self._refresh_translation_review()
+
+    def _continue_to_synthesis(self) -> None:
+        if self._is_processing() or not self._reviewing_translation:
+            return
+        if not any(row["translated_subtitle"].strip() for row in self.model._data.values()):
+            return
+        video_path = self.task.video_path if self.task else None
+        if not video_path or not Path(video_path).is_file():
+            formats = " ".join(f"*.{fmt.value}" for fmt in SupportedVideoFormats)
+            video_path, _ = QFileDialog.getOpenFileName(
+                self, self.tr("選擇要合成的影片"), "", f"{self.tr('影片')} ({formats})"
+            )
+            if not video_path:
+                return
+            self.task.video_path = video_path
+        if self._save_translation_review():
+            self.finished.emit(video_path, str(self._review_path()))
 
     def show_prompt_dialog(self) -> None:
         dialog = PromptDialog(self)
@@ -429,8 +622,11 @@ class SubtitleInterface(QWidget):
 
     def set_task(self, task: SubtitleTask) -> None:
         """设置任务并更新UI"""
-        if hasattr(self, "subtitle_optimization_thread"):
-            self.subtitle_optimization_thread.stop()  # type: ignore
+        if self._is_processing():
+            self._pending_task = task
+            self._pending_start = False
+            self._request_subtitle_cancel()
+            return
         self.start_button.setEnabled(True)
         self.task = task
         self.subtitle_path = task.subtitle_path
@@ -445,9 +641,16 @@ class SubtitleInterface(QWidget):
         self.model._data = asr_data.to_json()
         self.model.layoutChanged.emit()
         self.status_label.setText(self.tr("已加载文件"))
+        self._restore_translation_review()
 
-    def start_subtitle_optimization(self, need_create_task: bool = True) -> None:
+    def start_subtitle_optimization(
+        self, need_create_task: bool = True, *, restart_review: bool = False
+    ) -> None:
         if self._is_processing():
+            return
+        if self._reviewing_translation and not restart_review:
+            if need_create_task:
+                self._retry_missing_translations()
             return
         if not self.subtitle_path:
             InfoBar.warning(
@@ -458,20 +661,34 @@ class SubtitleInterface(QWidget):
             )
             return
         self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
         self.progress_bar.resume()
         self.progress_bar.reset()
         self.cancel_button.show()
 
+        input_data = None
         if need_create_task:
-            # 将当前表格状态写回原文件，保留用户的合并/删除/编辑
+            # Apply table edits without rewriting the imported source file.
             if self.model._data:
-                ASRData.from_json(self.model._data).to_srt(save_path=self.subtitle_path)
-            self.task = TaskFactory.create_subtitle_task(file_path=self.subtitle_path)
+                input_data = ASRData.from_json(self.model._data)
+                for cue in input_data.segments:
+                    cue.translated_text = ""
+            previous_task = self.task
+            self.task = TaskFactory.create_subtitle_task(
+                self.subtitle_path,
+                previous_task.video_path if previous_task else None,
+                need_next_task=bool(previous_task and previous_task.need_next_task),
+            )
+        if restart_review and self.task and self.task.subtitle_config:
+            self.task.subtitle_config.target_language = self._review_target
         if not self.task:
             self.start_button.setEnabled(True)
             self.cancel_button.hide()
             return
-        self.subtitle_optimization_thread = SubtitleThread(self.task)
+        self.subtitle_optimization_thread = SubtitleThread(
+            self.task, input_data=input_data, allow_partial=True
+        )
+        self._refresh_translation_review()
         self.subtitle_optimization_thread.finished.connect(
             self.on_subtitle_optimization_finished
         )
@@ -480,8 +697,15 @@ class SubtitleInterface(QWidget):
         )
         self.subtitle_optimization_thread.update.connect(self.update_data)
         self.subtitle_optimization_thread.update_all.connect(self.update_all)
+        self.subtitle_optimization_thread.partial.connect(self._on_partial_translation)
         self.subtitle_optimization_thread.error.connect(
             self.on_subtitle_optimization_error
+        )
+        self.subtitle_optimization_thread.cancelled.connect(
+            self._on_subtitle_cancelled
+        )
+        QThread.finished.__get__(self.subtitle_optimization_thread, SubtitleThread).connect(
+            self._on_subtitle_worker_exit
         )
         self.subtitle_optimization_thread.set_custom_prompt_text(
             self.custom_prompt_text
@@ -496,27 +720,45 @@ class SubtitleInterface(QWidget):
 
     def process(self) -> None:
         """主处理函数"""
-        # 检查是否有任务
+        if self._pending_task is not None:
+            self._pending_start = True
+            return
         self.start_subtitle_optimization(need_create_task=False)
 
     def on_subtitle_optimization_finished(
         self, video_path: str, output_path: str
     ) -> None:
-        self.start_button.setEnabled(True)
         self.cancel_button.hide()
         self.progress_bar.setValue(100)
-        if self.task and self.task.need_next_task:
+        self._reviewing_translation = False
+        self._review_panel.hide()
+        if self.subtitle_path and self.task and self.task.subtitle_config.need_translate:
+            review_path = self._review_path()
+            try:
+                review_path.unlink(missing_ok=True)
+            except OSError as exc:
+                InfoBar.warning(
+                    self.tr("無法移除舊的譯文暫存"),
+                    str(exc),
+                    duration=INFOBAR_DURATION_WARNING,
+                    parent=self,
+                )
+        if (
+            self._pending_task is None
+            and not self._close_pending
+            and self.task
+            and self.task.need_next_task
+        ):
             self.finished.emit(video_path, output_path)
         InfoBar.success(
-            self.tr("优化完成"),
-            self.tr("优化完成字幕..."),
+            self.tr("字幕處理完成"),
+            self.status_label.text(),
             duration=INFOBAR_DURATION_SUCCESS,
             position=InfoBarPosition.BOTTOM,
             parent=self.parent(),
         )
 
     def on_subtitle_optimization_error(self, error: str) -> None:
-        self.start_button.setEnabled(True)
         self.cancel_button.hide()  # 隐藏取消按钮
         self.progress_bar.error()
         InfoBar.error(
@@ -527,10 +769,14 @@ class SubtitleInterface(QWidget):
         )
 
     def on_subtitle_optimization_progress(self, value: int, status: str) -> None:
+        if self._pending_task is not None or self._close_pending:
+            return
         self.progress_bar.setValue(value)
         self.status_label.setText(status)
 
     def update_data(self, data):
+        if self._reviewing_translation and self.subtitle_optimization_thread is not None:
+            return
         self.model.update_data(data)
 
     def update_all(self, data):
@@ -547,6 +793,8 @@ class SubtitleInterface(QWidget):
                     widget.hide()
 
     def on_file_select(self) -> None:
+        if self._is_processing():
+            return
         # 构建文件过滤器
         subtitle_formats = " ".join(
             f"*.{fmt.value}" for fmt in SupportedSubtitleFormats
@@ -557,7 +805,6 @@ class SubtitleInterface(QWidget):
             self, self.tr("选择字幕文件"), "", filter_str
         )
         if file_path:
-            self.subtitle_path = file_path
             self.load_subtitle_file(file_path)
 
     def on_save_format_clicked(self, format: str) -> None:
@@ -566,6 +813,21 @@ class SubtitleInterface(QWidget):
             InfoBar.warning(
                 self.tr("警告"),
                 self.tr("请先加载字幕文件"),
+                duration=INFOBAR_DURATION_WARNING,
+                parent=self,
+            )
+            return
+
+        layout = cfg.subtitle_layout.value
+        if layout is SubtitleLayoutEnum.ONLY_TRANSLATE and (
+            not self.model._data or any(
+                row["original_subtitle"].strip() and not row["translated_subtitle"].strip()
+                for row in self.model._data.values()
+            )
+        ):
+            InfoBar.warning(
+                self.tr("譯文尚未完成"),
+                self.tr("請先完成字幕翻譯，或選擇「僅原文」儲存。"),
                 duration=INFOBAR_DURATION_WARNING,
                 parent=self,
             )
@@ -585,7 +847,6 @@ class SubtitleInterface(QWidget):
         try:
             # 转换并保存字幕
             asr_data = ASRData.from_json(self.model._data)
-            layout = cfg.subtitle_layout.value
 
             if file_path.endswith(".ass"):
                 style_str = get_subtitle_style(cfg.subtitle_style_name.value)
@@ -631,16 +892,23 @@ class SubtitleInterface(QWidget):
         open_folder(target_dir)
 
     def load_subtitle_file(self, file_path: str) -> None:
+        if self._is_processing():
+            return
         self.subtitle_path = file_path
+        self.task = None
         asr_data = ASRData.from_subtitle_file(file_path)
         self.model._data = asr_data.to_json()
         self.model.layoutChanged.emit()
         self.status_label.setText(self.tr("已加载文件"))
+        self._restore_translation_review()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         event.accept() if event.mimeData().hasUrls() else event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
+        if self._is_processing():
+            event.ignore()
+            return
         files = [u.toLocalFile() for u in event.mimeData().urls()]
         for file_path in files:
             if not os.path.isfile(file_path):
@@ -672,9 +940,18 @@ class SubtitleInterface(QWidget):
         event.accept()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if hasattr(self, "subtitle_optimization_thread"):
-            self.subtitle_optimization_thread.stop()  # type: ignore
+        if not self.prepare_to_close():
+            event.ignore()
+            return
         super().closeEvent(event)
+
+    def prepare_to_close(self) -> bool:
+        if not self._is_processing():
+            return True
+        self._close_pending = True
+        self._pending_task = None
+        self._request_subtitle_cancel()
+        return False
 
     def show_subtitle_settings(self) -> None:
         """显示字幕设置对话框"""
@@ -770,7 +1047,7 @@ class SubtitleInterface(QWidget):
 
     def merge_selected_rows(self, rows: List[int]) -> None:
         """合并选中的字幕行"""
-        if not rows or len(rows) < 2:
+        if self._is_processing() or len(rows) < 2:
             return
 
         # 获取选中行的数据
@@ -823,6 +1100,7 @@ class SubtitleInterface(QWidget):
         # 更新模型数据
         self.subtitle_table.clearSelection()
         self.model.update_all(new_data)
+        self._on_translation_review_edit()
 
         # 显示成功提示
         InfoBar.success(
@@ -834,7 +1112,7 @@ class SubtitleInterface(QWidget):
 
     def delete_selected_rows(self, rows: List[int]) -> None:
         """删除选中的字幕行"""
-        if not rows:
+        if self._is_processing() or not rows:
             return
 
         data = self.model._data
@@ -849,14 +1127,13 @@ class SubtitleInterface(QWidget):
 
         self.subtitle_table.clearSelection()
         self.model.update_all(new_data)
+        self._on_translation_review_edit()
 
     def _is_processing(self) -> bool:
         """是否有任何处理任务正在运行"""
-        if hasattr(self, "subtitle_optimization_thread") and self.subtitle_optimization_thread.isRunning():  # type: ignore
+        if self.subtitle_optimization_thread is not None:
             return True
-        if hasattr(self, "_retranslate_thread") and self._retranslate_thread.isRunning():
-            return True
-        return False
+        return self._retranslate_thread is not None
 
     def retranslate_selected_rows(self, rows: List[int]) -> None:
         """重新翻译选中的字幕行"""
@@ -868,6 +1145,14 @@ class SubtitleInterface(QWidget):
         # 提取选中行数据，保留原始键名（行号字符串）
         all_keys = list(self.model._data.keys())
         selected_data = {all_keys[row]: self.model._data[all_keys[row]] for row in rows}
+        originals = [self.model._data[key]["original_subtitle"] for key in all_keys]
+        context_by_row = {
+            all_keys[row]: (
+                originals[row - 1] if row > 0 else "",
+                originals[row + 1] if row + 1 < len(originals) else "",
+            )
+            for row in rows
+        }
 
         # 获取当前翻译配置
         subtitle_task = TaskFactory.create_subtitle_task(
@@ -876,6 +1161,8 @@ class SubtitleInterface(QWidget):
         config = subtitle_task.subtitle_config
         if not config:
             return
+        if self._reviewing_translation:
+            config = replace(config, target_language=self._review_target)
 
         self.start_button.setEnabled(False)
         self.status_label.setText(self.tr("正在重新翻译..."))
@@ -883,16 +1170,24 @@ class SubtitleInterface(QWidget):
         self.progress_bar.reset()
 
         file_name = Path(self.subtitle_path).name if self.subtitle_path else ""
-        self._retranslate_thread = RetranslateThread(selected_data, config, file_name)
+        self._retranslate_thread = RetranslateThread(
+            selected_data, config, file_name, context_by_row=context_by_row
+        )
         self._retranslate_thread.finished.connect(self._on_retranslate_finished)
+        QThread.finished.__get__(self._retranslate_thread, RetranslateThread).connect(
+            self._on_subtitle_worker_exit
+        )
         self._retranslate_thread.progress.connect(self.on_subtitle_optimization_progress)
         self._retranslate_thread.error.connect(self._on_retranslate_error)
+        self._refresh_translation_review()
         self._retranslate_thread.start()
 
     def _on_retranslate_finished(self, result: dict) -> None:
-        self.start_button.setEnabled(True)
         self.model.update_data(result)
         self.progress_bar.setValue(100)
+        if self._reviewing_translation and self._missing_translation_rows():
+            self.status_label.setText(self.tr("翻譯部分完成"))
+            return
         self.status_label.setText(self.tr("重新翻译完成"))
         InfoBar.success(
             self.tr("翻译完成"),
@@ -902,7 +1197,6 @@ class SubtitleInterface(QWidget):
         )
 
     def _on_retranslate_error(self, error: str) -> None:
-        self.start_button.setEnabled(True)
         self.progress_bar.error()
         self.status_label.setText(self.tr("重新翻译失败"))
         InfoBar.error(
@@ -939,19 +1233,42 @@ class SubtitleInterface(QWidget):
 
     def cancel_optimization(self) -> None:
         """取消字幕校正"""
-        if hasattr(self, "subtitle_optimization_thread"):
-            self.subtitle_optimization_thread.stop()  # type: ignore
+        self._request_subtitle_cancel()
+
+    def _request_subtitle_cancel(self) -> None:
+        if self.subtitle_optimization_thread is not None:
+            self.subtitle_optimization_thread.stop()
+        if self._retranslate_thread is not None:
+            self._retranslate_thread.stop()
+        self.cancel_button.setEnabled(False)
+        self.status_label.setText(self.tr("正在取消字幕處理…"))
+
+    @pyqtSlot()
+    def _on_subtitle_cancelled(self) -> None:
+        self.cancel_button.hide()
+        self.progress_bar.resume()
+        self.progress_bar.setValue(0)
+        self.status_label.setText(self.tr("已取消字幕處理"))
+
+    @pyqtSlot()
+    def _on_subtitle_worker_exit(self) -> None:
+        if self.sender() is self.subtitle_optimization_thread:
+            self.subtitle_optimization_thread = None
+        elif self.sender() is self._retranslate_thread:
+            self._retranslate_thread = None
+        if self._close_pending:
+            self._close_pending = False
+            self.ready_to_close.emit()
+            self.close()
+        elif self._pending_task is not None:
+            task, self._pending_task = self._pending_task, None
+            start, self._pending_start = self._pending_start, False
+            self.set_task(task)
+            if start:
+                self.process()
+        else:
             self.start_button.setEnabled(True)
-            self.cancel_button.hide()
-            self.progress_bar.resume()  # 恢复正常状态
-            self.progress_bar.setValue(0)
-            self.status_label.setText(self.tr("已取消校正"))
-            InfoBar.warning(
-                self.tr("已取消"),
-                self.tr("字幕校正已取消"),
-                duration=INFOBAR_DURATION_WARNING,
-                parent=self,
-            )
+            self._refresh_translation_review()
 
     def on_target_language_changed(self, language: str) -> None:
         """处理翻译语言变更"""
@@ -969,14 +1286,21 @@ class SubtitleInterface(QWidget):
     def on_subtitle_translation_changed(self, checked: bool) -> None:
         """处理字幕翻译开关变更"""
         cfg.set(cfg.need_translate, checked)
+        self._sync_translation_controls(checked)
+
+    def _sync_translation_controls(self, checked: bool) -> None:
+        if not checked and cfg.subtitle_layout.value is SubtitleLayoutEnum.ONLY_TRANSLATE:
+            signalBus.subtitle_layout_changed.emit(SubtitleLayoutEnum.ONLY_ORIGINAL.value)
         self.translate_button.setChecked(checked)
-        # 控制翻译语言选择按钮的启用状态
         self.target_language_button.setEnabled(checked)
+        self.model.headerDataChanged.emit(Qt.Horizontal, 3, 3)
 
     def on_subtitle_layout_changed(self, layout: str) -> None:
         """处理字幕排布变更"""
         layout_enum = SubtitleLayoutEnum(layout)  # Convert string to enum
         cfg.set(cfg.subtitle_layout, layout_enum)
+        if layout_enum is SubtitleLayoutEnum.ONLY_TRANSLATE:
+            cfg.set(cfg.need_translate, True)
         self.layout_button.setText(layout)
 
 

@@ -469,11 +469,15 @@ class VideoSynthesisInterface(QWidget):
     def prepare_manual_synthesis(self):
         """Prepare step four without starting it automatically."""
         self.progress_bar.reset()
-        self.status_label.setText(self.tr("前三步已完成，等待手动合成"))
+        review = self.task and (self.task.subtitle_path or "").endswith(".momo-translation.json")
+        self.status_label.setText(
+            self.tr("已載入審閱後的字幕，等待手動合成")
+            if review else self.tr("前三步已完成，等待手动合成")
+        )
         self._set_synthesis_running(False)
         InfoBar.info(
             self.tr("等待手动合成"),
-            self.tr("语音转录和字幕优化翻译已完成，请确认设置后点击“开始合成”"),
+            self.tr("請確認字幕排布與畫質，再點擊「開始合成」。"),
             duration=INFOBAR_DURATION_SUCCESS,
             position=InfoBarPosition.TOP,
             parent=self,

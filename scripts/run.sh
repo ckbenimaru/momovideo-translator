@@ -1,12 +1,12 @@
 #!/bin/bash
 # VideoCaptioner Installer & Launcher for macOS/Linux
-# Usage: curl -fsSL https://raw.githubusercontent.com/WEIFENG2333/VideoCaptioner/main/scripts/run.sh | bash
+# Usage from the momo checkout: bash scripts/run.sh
 
 set -e
 
 # Configuration
-REPO_URL="https://github.com/WEIFENG2333/VideoCaptioner.git"
-INSTALL_DIR="${VIDEOCAPTIONER_HOME:-$HOME/VideoCaptioner}"
+REPO_URL="https://github.com/ckbenimaru/momovideo-translator.git"
+INSTALL_DIR="${VIDEOCAPTIONER_HOME:-$HOME/momovideo-translator}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -26,7 +26,7 @@ trap 'if [ $? -ne 0 ]; then echo ""; print_error "Installation failed at line $L
 # Check if running from within the project directory
 detect_project_dir() {
     # Check if in project directory
-    if [ -f "pyproject.toml" ] && [ -f "pyproject.toml" ] && [ -d "videocaptioner" ]; then
+    if [ -f "pyproject.toml" ] && [ -d "videocaptioner" ]; then
         INSTALL_DIR="$(pwd)"
         return 0
     fi
@@ -189,7 +189,7 @@ run_app() {
     print_info "Starting VideoCaptioner..."
     echo ""
     cd "$INSTALL_DIR"
-    uv run videocaptioner
+    uv run videocaptioner-gui
 }
 
 # Main

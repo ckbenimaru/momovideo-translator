@@ -68,6 +68,12 @@ def transcribe(audio_path: str, config: TranscribeConfig, callback=None) -> ASRD
         )
 
         asr_data = resegment_asr_data(asr_data, config_from_object(config))
+        if config.transcribe_model == TranscribeModelEnum.QWEN3_ASR and config.qwen_device == "mlx":
+            # Adjacent audio chunks may overlap by 250 ms. Keep a shared
+            # subtitle boundary rather than displaying competing cues.
+            for previous, current in zip(asr_data.segments, asr_data.segments[1:]):
+                if previous.start_time < current.start_time < previous.end_time:
+                    previous.end_time = current.start_time
 
     # Optimize legacy sentence-level timing. FasterWhisper timing has already
     # been rebuilt from exact word timestamps and must not be stretched here.

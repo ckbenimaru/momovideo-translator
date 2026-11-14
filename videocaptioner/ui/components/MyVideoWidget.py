@@ -18,7 +18,7 @@ from qfluentwidgets.multimedia.media_play_bar import (
     MediaPlayBarButton,
 )
 
-from videocaptioner.config import RESOURCE_PATH
+from videocaptioner.config import LOGO_PATH
 from videocaptioner.ui.common.signal_bus import signalBus
 
 
@@ -481,7 +481,7 @@ class MyVideoWidget(QWidget):
         # 设置初始窗口大小
         self.resize(800, 600)
         self.setWindowTitle("VideoCaptioner")
-        self.setWindowIcon(QIcon(str(RESOURCE_PATH / "assets" / "logo.png")))
+        self.setWindowIcon(QIcon(str(LOGO_PATH)))
 
         # 创建一个专门用于视频输出的 widget
         self.videoWidget = QWidget(self)

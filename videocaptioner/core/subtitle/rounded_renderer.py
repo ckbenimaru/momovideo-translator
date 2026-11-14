@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, List, NamedTuple, Optional, Tuple
 
 from PIL import Image, ImageDraw
 
@@ -45,11 +45,16 @@ def _scale_style_for_geometry(
     return replace(
         style,
         font_size=max(1, int(round(style.font_size * scale))),
-        corner_radius=max(1, int(round(style.corner_radius * scale))),
+        corner_radius=max(0, int(round(style.corner_radius * scale))),
         padding_h=max(1, int(round(style.padding_h * scale))),
         padding_v=max(1, int(round(style.padding_v * scale))),
-        margin_bottom=geometry.bottom_margin,
-        line_spacing=max(1, int(round(style.line_spacing * scale))),
+        # Adjust the existing orientation-aware margin relative to the 720p default.
+        margin_bottom=round(
+            geometry.bottom_margin * style.margin_bottom / RoundedBgStyle.margin_bottom
+        ),
+        line_spacing=(
+            round(style.line_spacing * scale) if style.line_spacing is not None else None
+        ),
         letter_spacing=max(0, int(round(style.letter_spacing * scale))),
         # Keep the protective outline at the requested physical 1 px.
         outline_width=style.outline_width,
@@ -68,7 +73,9 @@ _TRADITIONAL_HINTS = set(
 
 
 def _font_name_for_text(text: str, style: RoundedBgStyle) -> str:
-    """Choose region-correct Noto Sans family for the subtitle text."""
+    """Use the chosen family, or select regional Noto Sans automatically."""
+    if style.font_name:
+        return style.font_name
     if not is_mainly_cjk(text):
         return style.font_name_en
     if any(char in _TRADITIONAL_HINTS for char in text):
@@ -168,11 +175,10 @@ def _get_video_info(video_path: str) -> Tuple[int, int, float]:
     try:
         width, height = probe_display_geometry(video_path)
     except (OSError, RuntimeError, ValueError):
-        width, height = 0, 0
-        if match := re.search(r"Stream.*Video:.* (\d{2,5})x(\d{2,5})", result.stderr):
-            width, height = int(match.group(1)), int(match.group(2))
-    else:
-        raise ValueError(f"Cannot get video resolution: {video_path}")
+        match = re.search(r"Stream.*Video:.* (\d{2,5})x(\d{2,5})", result.stderr)
+        if not match:
+            raise ValueError(f"Cannot get video resolution: {video_path}") from None
+        width, height = int(match.group(1)), int(match.group(2))
 
     # 解析时长
     duration = 0.0
@@ -183,79 +189,68 @@ def _get_video_info(video_path: str) -> Tuple[int, int, float]:
     return width, height, duration
 
 
+def _line_gap(line_height: int, style: RoundedBgStyle) -> int:
+    if style.line_spacing is not None:
+        return style.line_spacing
+    return max(0, round(line_height * (style.line_height_ratio - 1)))
+
+
+class _TextBlockMetrics(NamedTuple):
+    lines: List[Tuple[int, int]]
+    line_height: int
+    line_step: int
+    height: int
+
+
+def _measure_text_block(
+    texts: List[str], font: FontType, style: RoundedBgStyle
+) -> _TextBlockMetrics:
+    """Measure the text block for positioning and drawing."""
+    lines = []
+    heights = []
+    for text in texts:
+        left, top, right, bottom = font.getbbox(text)
+        width = right - left + style.outline_width * 2
+        width += style.letter_spacing * max(0, len(text) - 1)
+        lines.append((width, top))
+        heights.append(bottom - top + style.outline_width * 2)
+
+    line_height = max(heights)
+    line_step = line_height + _line_gap(line_height, style)
+    block_height = line_height + line_step * (len(lines) - 1) + style.padding_v * 2
+    return _TextBlockMetrics(lines, line_height, line_step, block_height)
+
+
 def render_text_block(
     draw: ImageDraw.ImageDraw,
     texts: List[str],
     font: FontType,
     center_x: int,
-    top_y: float,
+    top_y: int,
     style: RoundedBgStyle,
-) -> float:
-    """
-    渲染多行文本块（共享圆角背景）
-
-    Args:
-        draw: PIL ImageDraw 对象
-        texts: 文本行列表
-        font: 字体对象
-        center_x: 水平中心位置
-        top_y: 顶部 y 坐标
-        style: 样式配置
-
-    Returns:
-        背景框高度
-    """
-    if not texts:
-        return 0
-
+    metrics: _TextBlockMetrics,
+) -> None:
+    """Draw one measured text block with a shared rounded background."""
     bg_color = hex_to_rgba(style.bg_color)
     text_color = hex_to_rgba(style.text_color)
     outline_color = hex_to_rgba(style.outline_color)
     shadow_color = hex_to_rgba(style.shadow_color)
 
-    # 计算All行的尺寸和垂直偏移
-    line_sizes = []
-    line_offsets = []
-    for text in texts:
-        bbox = font.getbbox(text)
-        text_width = bbox[2] - bbox[0]
-        # 如果有字符间距，需要加上额外的宽度
-        if style.letter_spacing > 0 and len(text) > 1:
-            text_width += style.letter_spacing * (len(text) - 1)
-        line_sizes.append(
-            (
-                text_width + style.outline_width * 2,
-                bbox[3] - bbox[1] + style.outline_width * 2,
-            )
-        )
-        line_offsets.append(bbox[1])  # 记录垂直偏移，用于居中对齐
-
-    max_width = max(w for w, h in line_sizes)
-    line_height = max(h for w, h in line_sizes)
-    line_step = max(
-        line_height + style.line_spacing,
-        int(round(line_height * style.line_height_ratio)),
-    )
-    total_height = line_height + line_step * (len(texts) - 1)
-
     # 绘制共享背景
-    bg_width = max_width + style.padding_h * 2
-    bg_height = total_height + style.padding_v * 2
+    bg_width = max(width for width, _ in metrics.lines) + style.padding_h * 2
     bg_left = center_x - bg_width // 2
     bg_top = top_y
 
     draw.rounded_rectangle(
-        [bg_left, bg_top, bg_left + bg_width, bg_top + bg_height],
+        [bg_left, bg_top, bg_left + bg_width - 1, bg_top + metrics.height - 1],
         radius=style.corner_radius,
         fill=bg_color,
     )
 
     # 绘制文本（补偿字体垂直偏移）
     y = bg_top + style.padding_v
-    for i, text in enumerate(texts):
-        w, h = line_sizes[i]
-        x = center_x - w // 2
-        y_offset = line_offsets[i]
+    for text, (line_width, y_offset) in zip(texts, metrics.lines):
+        x = center_x - line_width // 2
         text_y = y - y_offset  # 补偿垂直偏移，使文本视觉居中
 
         # 如果有字符间距，逐字符绘制
@@ -291,9 +286,7 @@ def render_text_block(
             # 无字符间距，一次性绘制（性能更好）
             draw_character((x, text_y), text)
 
-        y += line_step
-
-    return bg_height
+        y += metrics.line_step
 
 
 def render_subtitle_image(
@@ -325,48 +318,28 @@ def render_subtitle_image(
     primary_font, primary_lines = (
         _fit_text_lines(primary_text, width, style, primary_limit)
         if primary_text
-        else (get_font(style.font_size, style.font_name, style.font_weight), [])
+        else (None, [])
     )
     secondary_font, secondary_lines = (
         _fit_text_lines(secondary_text, width, style, secondary_limit)
         if secondary_text
-        else (primary_font, [])
+        else (None, [])
     )
 
     center_x = width // 2
 
-    # 计算总高度
-    def calc_block_height(lines: List[str], font: FontType) -> float:
-        if not lines:
-            return 0
-        bbox = font.getbbox("测试Ag")
-        line_h = bbox[3] - bbox[1] + style.outline_width * 2
-        line_step = max(
-            line_h + style.line_spacing,
-            int(round(line_h * style.line_height_ratio)),
-        )
-        return line_h + line_step * (len(lines) - 1) + style.padding_v * 2
+    blocks = [
+        (lines, font, _measure_text_block(lines, font, style))
+        for lines, font in ((primary_lines, primary_font), (secondary_lines, secondary_font))
+        if lines and font is not None
+    ]
+    gap = _line_gap(blocks[0][2].line_height, style) if len(blocks) == 2 else 0
+    total_height = sum(metrics.height for _, _, metrics in blocks) + gap
+    current_y = height - style.margin_bottom - total_height
 
-    primary_height = calc_block_height(primary_lines, primary_font)
-    secondary_height = calc_block_height(secondary_lines, secondary_font)
-    gap = style.line_spacing if primary_lines and secondary_lines else 0
-    total_height = primary_height + gap + secondary_height
-
-    # 从底部计算起始位置
-    bottom_y = height - style.margin_bottom
-    start_y = bottom_y - total_height
-
-    # 渲染文本块
-    current_y = start_y
-    if primary_lines:
-        h = render_text_block(
-            draw, primary_lines, primary_font, center_x, current_y, style
-        )
-        current_y += h + gap
-    if secondary_lines:
-        render_text_block(
-            draw, secondary_lines, secondary_font, center_x, current_y, style
-        )
+    for lines, font, metrics in blocks:
+        render_text_block(draw, lines, font, center_x, current_y, style, metrics)
+        current_y += metrics.height + gap
 
     return image
 
@@ -568,6 +541,15 @@ def render_rounded_video(
 
             # 判断是否是最后一批
             is_last_batch = batch_idx == total_batches - 1
+            # Keep the original audio for the final MP4. Intermediate MP4
+            # files only need video and can accept sources with PCM audio.
+            audio_args = []
+            if is_last_batch:
+                audio_input = 0
+                if batch_idx:
+                    audio_input = len(batch_frames) + 1
+                    input_args.extend(["-i", video_path])
+                audio_args = ["-map", f"{audio_input}:a?"]
             batch_output = (
                 output_path if is_last_batch else temp_path / f"batch_{batch_idx:03d}.mp4"
             )
@@ -587,8 +569,6 @@ def render_rounded_video(
                     "0",
                     "-pix_fmt",
                     "yuv420p",
-                    "-c:a",
-                    "copy",
                 ]
             )
             cmd = [
@@ -599,8 +579,7 @@ def render_rounded_video(
                 filter_complex,
                 "-map",
                 final_output,
-                "-map",
-                "0:a?",
+                *audio_args,
                 "-t",
                 str(video_duration),  # 强制保持原视频时长
                 *encoding_args,
@@ -646,8 +625,7 @@ def render_rounded_video(
                     filter_complex,
                     "-map",
                     final_output,
-                    "-map",
-                    "0:a?",
+                    *audio_args,
                     "-t",
                     str(video_duration),
                     *fallback_args,

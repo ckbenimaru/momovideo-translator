@@ -1,0 +1,17 @@
+{
+  "name": "youtube-modern",
+  "description": "YouTube-style modern subtitle",
+  "mode": "ass",
+  "font_name": "Noto Sans TC",
+  "font_size": 42,
+  "primary_color": "#ffffff",
+  "outline_color": "#20202037",
+  "outline_width": 1.0,
+  "back_color": "#00000037",
+  "border_style": 3,
+  "shadow": 0.0,
+  "bold": false,
+  "spacing": 0.0,
+  "margin_horizontal": 20,
+  "margin_bottom": 58
+}

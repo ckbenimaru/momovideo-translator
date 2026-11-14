@@ -16,7 +16,7 @@ from qfluentwidgets import (
     SplashScreen,
 )
 
-from videocaptioner.config import ASSETS_PATH, GITHUB_REPO_URL
+from videocaptioner.config import GITHUB_REPO_URL, LOGO_PATH
 from videocaptioner.core.constant import INFOBAR_DURATION_FOREVER
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.components.DonateDialog import DonateDialog
@@ -27,8 +27,6 @@ from videocaptioner.ui.view.llm_logs_interface import LLMLogsInterface
 from videocaptioner.ui.view.setting_interface import SettingInterface
 from videocaptioner.ui.view.subtitle_style_interface import SubtitleStyleInterface
 
-LOGO_PATH = ASSETS_PATH / "logo.png"
-
 
 class MainWindow(FluentWindow):
     def __init__(self):
@@ -37,6 +35,7 @@ class MainWindow(FluentWindow):
 
         # 创建子界面
         self.homeInterface = HomeInterface(self)
+        self.homeInterface.subtitle_optimization_interface.ready_to_close.connect(self.close)
         self.settingInterface = SettingInterface(self)
         self.subtitleStyleInterface = SubtitleStyleInterface(self)
         self.batchProcessInterface = BatchProcessInterface(self)
@@ -180,6 +179,9 @@ class MainWindow(FluentWindow):
             self.splashScreen.resize(self.size())
 
     def closeEvent(self, event):
+        if not self.homeInterface.subtitle_optimization_interface.prepare_to_close():
+            event.ignore()
+            return
         # 关闭所有子界面
         # self.homeInterface.close()
         # self.batchProcessInterface.close()

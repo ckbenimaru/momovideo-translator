@@ -17,6 +17,7 @@ from ..subtitle.ass_renderer import render_ass_video
 from ..subtitle.ass_utils import auto_wrap_ass_file
 from ..subtitle.rounded_renderer import render_rounded_video
 from ..utils.logger import setup_logger
+from .encoding_policy import build_soft_mp4_args
 
 if TYPE_CHECKING:
     from videocaptioner.core.asr.asr_data import ASRData
@@ -208,18 +209,18 @@ def add_subtitles(
 
         if soft_subtitle:
             # 添加软字幕
+            mux_args = (
+                build_soft_mp4_args(input_file, crf, preset)
+                if Path(output).suffix.lower() == ".mp4"
+                else ["-c:v", "copy", "-c:a", "copy", "-c:s", "mov_text"]
+            )
             cmd = [
                 "ffmpeg",
                 "-i",
                 input_file,
                 "-i",
                 processed_subtitle,
-                "-c:v",
-                "copy",
-                "-c:a",
-                "copy",
-                "-c:s",
-                "mov_text",
+                *mux_args,
                 "-y",
                 output,
             ]

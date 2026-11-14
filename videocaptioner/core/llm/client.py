@@ -5,6 +5,7 @@ import threading
 from typing import Any, List, Optional
 from urllib.parse import urlparse, urlunparse
 
+import httpx
 import openai
 from openai import OpenAI
 from tenacity import (
@@ -18,7 +19,7 @@ from tenacity import (
 from videocaptioner.core.utils.cache import get_llm_cache, memoize
 from videocaptioner.core.utils.logger import setup_logger
 
-from .request_logger import create_logging_http_client, log_llm_response
+from .request_logger import create_logging_http_client
 
 _global_client: Optional[OpenAI] = None
 _client_lock = threading.Lock()
@@ -65,10 +66,16 @@ def get_llm_client() -> OpenAI:
                         "OPENAI_BASE_URL and OPENAI_API_KEY environment variables must be set"
                     )
 
+                from videocaptioner.core.translate.ollama_runtime import is_local_ollama_url
+
+                options: dict[str, Any] = {}
+                if is_local_ollama_url(base_url):
+                    options.update(timeout=httpx.Timeout(30, connect=3), max_retries=0)
                 _global_client = OpenAI(
                     base_url=base_url,
                     api_key=api_key,
                     http_client=create_logging_http_client(),
+                    **options,
                 )
 
     return _global_client
@@ -107,17 +114,12 @@ def _call_llm_api(
     """实际调用 LLM API（带重试）"""
     client = get_llm_client()
 
-    response = client.chat.completions.create(
+    return client.chat.completions.create(
         model=model,
         messages=messages,  # pyright: ignore[reportArgumentType]
         temperature=temperature,
         **kwargs,
     )
-
-    # 记录响应内容
-    log_llm_response(response)
-
-    return response
 
 
 @memoize(get_llm_cache(), expire=3600, typed=True)

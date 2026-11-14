@@ -1,6 +1,6 @@
 ---
 title: 快速开始 - VideoCaptioner
-description: 快速安装和配置 VideoCaptioner，5分钟开始处理你的第一个视频字幕。支持 Windows、macOS、Linux 多平台。
+description: 从源码安装 momo 字幕助手，或在 macOS 启动本机已安装版本。
 head:
   - - meta
     - name: keywords
@@ -13,123 +13,26 @@ head:
 
 ## 系统要求
 
-- **Windows**: Windows 10/11 (64位)
-- **macOS**: macOS 10.15 或更高版本
-- **Linux**: Ubuntu 20.04+ / Debian 11+ / Fedora 35+
-- **Python**: Python 3.10 或更高版本（源码运行时需要）
-- **内存**: 建议 4GB 以上（使用本地 Whisper 需要 8GB+）
+- Windows 10／11（64 位）或 macOS（Apple Silicon 可用 MLX 本机转录）。
+- 源码安装需要 Git、uv、Python 3.10–3.12，以及提供 `ffmpeg`、`ffprobe` 和 libass 的 FFmpeg。
+- 本机转录和翻译模型需另行下载。Windows 的 CUDA 设置与 Mac 的 MLX 设置各自独立。
 
-## 安装方式
+## 启动已安装的 Mac 版
 
-### Windows 用户（推荐使用打包版本）
+如果 Finder 的「应用程序」中已有 **momo 字幕助手**，双击打开即可。从 GitHub 下载源码后，请按下一节安装。
 
-软件较为轻量，打包大小不足 60M，已集成所有必要环境，下载后可直接运行。
+## 从源码安装
 
-1. 从 [Release](https://github.com/WEIFENG2333/VideoCaptioner/releases) 页面下载最新版本的可执行程序
-
-   或者：[蓝奏盘下载](https://wwwm.lanzoue.com/ii14G2pdsbej)
-
-2. 双击打开安装包进行安装
-
-3. 首次运行会自动检测环境，无需额外配置
-
-### macOS / Linux 用户
-
-#### 使用自动安装脚本（推荐）
+先安装 Git、uv 和 FFmpeg，并确认 `ffmpeg -version` 和 `ffprobe -version` 可执行。然后运行：
 
 ```bash
-# 1. 克隆项目
-git clone https://github.com/WEIFENG2333/VideoCaptioner.git
-cd VideoCaptioner
-
-# 2. 运行安装脚本
-chmod +x run.sh
-./run.sh
+git clone https://github.com/ckbenimaru/momovideo-translator.git
+cd momovideo-translator
+uv sync --locked
+uv run --no-sync videocaptioner-gui
 ```
 
-脚本会自动：
-
-- 检测 Python 环境
-- 创建虚拟环境并安装依赖
-- 检测系统工具（ffmpeg、aria2）
-- 启动应用程序
-
-::: tip 提示
-macOS 用户需要先安装 [Homebrew](https://brew.sh/)
-:::
-
-#### 手动安装
-
-<details>
-<summary>点击展开手动安装步骤</summary>
-
-**1. 安装系统依赖**
-
-::: code-group
-
-```bash [macOS]
-brew install ffmpeg aria2 python@3.11
-```
-
-```bash [Ubuntu/Debian]
-sudo apt update
-sudo apt install ffmpeg aria2 python3.11 python3.11-venv python3-pip
-```
-
-```bash [Fedora]
-sudo dnf install ffmpeg aria2 python3.11
-```
-
-:::
-
-**2. 克隆项目并安装 Python 依赖**
-
-```bash
-git clone https://github.com/WEIFENG2333/VideoCaptioner.git
-cd VideoCaptioner
-
-# 创建虚拟环境
-python3.11 -m venv venv
-
-# 激活虚拟环境
-source venv/bin/activate  # macOS/Linux
-# 或
-.\venv\Scripts\activate   # Windows
-
-# 安装依赖
-pip install -r requirements.txt
-```
-
-**3. 运行程序**
-
-```bash
-python main.py
-```
-
-</details>
-
-### Docker 部署（实验性）
-
-::: warning 注意
-Docker 版本目前还比较基础，欢迎提交 PR 改进。
-:::
-
-```bash
-# 1. 构建镜像
-docker build -t video-captioner .
-
-# 2. 运行容器
-docker run -d \
-  -p 8501:8501 \
-  -v $(pwd)/temp:/app/temp \
-  -e OPENAI_BASE_URL="Your API address" \
-  -e OPENAI_API_KEY="Your API key" \
-  --name video-captioner \
-  video-captioner
-
-# 3. 访问应用
-# 打开浏览器访问 http://localhost:8501
-```
+源码启动使用仓库内的设置和模型。Apple Silicon 用户可在「转录模型」选择 Qwen3-ASR，在模型管理中安装独立运行环境、识别模型与 Forced Aligner。
 
 ## 基础配置
 
@@ -137,30 +40,7 @@ docker run -d \
 
 ### 1. LLM API 配置（可选但推荐）
 
-LLM 用于字幕断句、优化和翻译。软件内置了基础模型，但配置自己的 API 可以获得更好的效果。
-
-打开 **设置 → LLM 配置**，选择以下任一服务：
-
-| 服务商           | 特点               | 推荐模型                                |
-| ---------------- | ------------------ | --------------------------------------- |
-| **OpenAI**       | 质量最好           | `gpt-4o-mini` (经济), `gpt-4o` (高质量) |
-| **DeepSeek**     | 性价比高           | `deepseek-chat`                         |
-| **SiliconCloud** | 国内可用，并发较低 | `Qwen/Qwen2.5-72B-Instruct`             |
-| **Ollama**       | 本地运行，完全免费 | `llama3.1:8b`                           |
-
-::: tip 推荐
-如果需要高并发和优质模型，可使用本项目的 [LLM API 中转站](https://api.videocaptioner.cn)
-
-配置方式：
-
-- Base URL: `https://api.videocaptioner.cn/v1`
-- API Key: 注册后在个人中心获取
-
-推荐模型：
-
-- 高质量：`gemini-2.0-flash-exp`、`claude-sonnet-4.5`
-- 经济实惠：`gpt-4o-mini`、`gemini-2.0-flash-exp`
-  :::
+LLM 用于字幕断句、优化和翻译。在 **设置 → LLM 配置** 中，使用本机 Ollama 时，先安装并启动 Ollama，再执行 `ollama pull qwen3:4b-instruct-2507-q4_K_M` 下载模型。然后填写 `http://127.0.0.1:11434/v1` 和实际安装的 Qwen3 模型名称，再将翻译目标设为「繁體中文」。使用在线 LLM 时，按供应商要求配置，字幕和上下文会发送到该服务。
 
 详细配置方法请查看 [LLM 配置指南](/config/llm)。
 
@@ -170,19 +50,17 @@ LLM 用于字幕断句、优化和翻译。软件内置了基础模型，但配�
 
 | 引擎                 | 支持语言 | 运行方式 | 推荐场景                      |
 | -------------------- | -------- | -------- | ----------------------------- |
-| **FasterWhisper** ⭐ | 99种语言 | 本地     | 最推荐，准确度高，支持GPU加速 |
-| **B接口**            | 中英文   | 在线     | 快速测试，无需下载模型        |
-| **J接口**            | 中英文   | 在线     | 备用选项                      |
+| **Qwen3-ASR（MLX）** | 多语言   | 本地     | Apple Silicon                |
+| **FasterWhisper**    | 多语言   | 本地     | Windows GPU 加速             |
+| **B接口**            | 中英文   | 在线     | 上传音频到必剪                |
+| **J接口**            | 中英文   | 在线     | 上传音频到剪映                |
 | **WhisperCpp**       | 99种语言 | 本地     | 轻量级本地方案                |
 | **Whisper API**      | 99种语言 | 在线     | 使用 OpenAI API               |
 
 ::: tip 推荐配置
 
-- **中文视频**: FasterWhisper + Medium 模型或以上
-- **英文视频**: FasterWhisper + Small 模型即可
-- **其他语言**: FasterWhisper + Large-v2 模型
-
-首次使用需要在软件内下载模型，国内网络可直接下载。
+- Apple Silicon 可在模型管理中安装 Qwen3-ASR 及 Forced Aligner。
+- Windows 用户可按 GPU 和语言选择本机模型。
 :::
 
 详细配置方法请查看 [ASR 配置指南](/config/asr)。
@@ -210,7 +88,7 @@ LLM 用于字幕断句、优化和翻译。软件内置了基础模型，但配�
 2. 拖拽视频文件到窗口，或点击选择文件
    - 也可以输入 YouTube、B站等视频链接
 3. 点击 **"开始全流程处理"** 按钮
-4. 等待处理完成，输出文件保存在 `work-dir/` 目录
+4. 等待处理完成，合成视频默认保存在源视频旁。
 
 ::: info 处理流程
 全流程会依次执行：
@@ -257,7 +135,7 @@ LLM 用于字幕断句、优化和翻译。软件内置了基础模型，但配�
    - **硬字幕**：烧录到视频中
    - **软字幕**：内嵌字幕轨道（需要播放器支持）
 4. 点击 **"开始合成"**
-5. 输出视频保存在 `work-dir/` 目录
+5. 默认在源视频旁生成 `原檔名.done.mp4`。
 
 ## 实用技巧
 
@@ -330,4 +208,4 @@ LLM 用于字幕断句、优化和翻译。软件内置了基础模型，但配�
 
 ---
 
-如果在使用过程中遇到问题，欢迎提交 [Issue](https://github.com/WEIFENG2333/VideoCaptioner/issues) 或加入社区讨论。
+如果在使用过程中遇到问题，欢迎提交 [Issue](https://github.com/ckbenimaru/momovideo-translator/issues) 或加入社区讨论。

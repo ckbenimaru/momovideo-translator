@@ -139,21 +139,14 @@ def validate_faster_whisper() -> bool:
 
 def validate_whisper_cpp() -> bool:
     """Check that WhisperCpp executable is available."""
-    # Check common names for whisper.cpp binary
-    names = ["whisper-cpp", "whisper", "whisper-cpp-main"]
-    if not any(shutil.which(n) for n in names):
-        # Also check project's bin directory
-        try:
-            from videocaptioner.config import BIN_PATH
-            if not any((BIN_PATH / n).exists() for n in names):
-                output.error("WhisperCpp not found")
-                output.hint("Download from the GUI (Settings > WhisperCpp), or install manually.")
-                output.hint("See: https://github.com/ggerganov/whisper.cpp")
-                return False
-        except ImportError:
-            output.error("WhisperCpp not found on PATH")
-            output.hint("See: https://github.com/ggerganov/whisper.cpp")
-            return False
+    from videocaptioner.core.asr.whisper_cpp import detect_whisper_executable
+
+    try:
+        detect_whisper_executable()
+    except RuntimeError as error:
+        output.error(str(error))
+        output.hint("Install whisper.cpp and add its executable to PATH.")
+        return False
     return True
 
 

@@ -5,6 +5,7 @@ from videocaptioner.core.entities import VideoQualityEnum
 from videocaptioner.core.utils.encoding_policy import (
     SourceVideoInfo,
     build_mac_encoding_args,
+    build_soft_mp4_args,
     get_target_bitrate_kbps,
 )
 
@@ -44,6 +45,7 @@ class NvencEncodingPolicyTests(unittest.TestCase):
         self.assertEqual(option_value(args, "-tag:v"), "avc1")
         self.assertEqual(option_value(args, "-pix_fmt"), "yuv420p")
         self.assertEqual(option_value(args, "-c:a"), "aac")
+        self.assertEqual(option_value(args, "-profile:a"), "aac_low")
         self.assertEqual(option_value(args, "-b:a"), "192k")
         self.assertEqual(option_value(args, "-movflags"), "+faststart")
 
@@ -109,6 +111,47 @@ class NvencEncodingPolicyTests(unittest.TestCase):
         )
         self.assertEqual(option_value(args, "-b:v"), "1500k")
         self.assertEqual(max_rate, 1_875_000)
+
+
+class SoftMp4EncodingPolicyTests(unittest.TestCase):
+    @patch("videocaptioner.core.utils.encoding_policy._probe_streams")
+    def test_only_incompatible_audio_track_is_converted(self, probe):
+        probe.return_value = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "disposition": {"attached_pic": 1}},
+                {
+                    "index": 1, "codec_type": "video", "codec_name": "h264",
+                    "profile": "High", "pix_fmt": "yuv420p", "level": 31,
+                },
+                {"index": 2, "codec_type": "audio", "codec_name": "aac", "profile": "LC"},
+                {"index": 3, "codec_type": "audio", "codec_name": "pcm_s16le"},
+            ]
+        }
+        args = build_soft_mp4_args("input.mov", 28, "medium")
+        self.assertEqual(args[:6], ["-map", "0:1", "-map", "0:a?", "-map", "1:s:0"])
+        self.assertEqual(option_value(args, "-c:v"), "copy")
+        self.assertEqual(option_value(args, "-c:a"), "copy")
+        self.assertNotIn("-c:a:0", args)
+        self.assertEqual(option_value(args, "-c:a:1"), "aac")
+        self.assertEqual(option_value(args, "-profile:a:1"), "aac_low")
+        self.assertEqual(option_value(args, "-tag:v"), "avc1")
+        self.assertEqual(option_value(args, "-c:s"), "mov_text")
+        self.assertEqual(option_value(args, "-movflags"), "+faststart")
+        self.assertEqual(option_value(args, "-f"), "mp4")
+
+    @patch("videocaptioner.core.utils.encoding_policy._probe_streams")
+    def test_only_incompatible_video_is_converted(self, probe):
+        probe.return_value = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "prores"},
+                {"index": 1, "codec_type": "audio", "codec_name": "aac", "profile": "LC"},
+            ]
+        }
+        args = build_soft_mp4_args("input.mov", 28, "medium")
+        self.assertEqual(option_value(args, "-c:v"), "libx264")
+        self.assertEqual(option_value(args, "-pix_fmt"), "yuv420p")
+        self.assertEqual(option_value(args, "-c:a"), "copy")
+        self.assertNotIn("-c:a:0", args)
 
 
 if __name__ == "__main__":

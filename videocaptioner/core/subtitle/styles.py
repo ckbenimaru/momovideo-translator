@@ -1,6 +1,7 @@
 """Subtitle style configurations"""
 
 from dataclasses import dataclass
+from typing import Optional
 
 from videocaptioner.core.entities import SubtitleLayoutEnum
 
@@ -9,7 +10,7 @@ from videocaptioner.core.entities import SubtitleLayoutEnum
 class RoundedBgStyle:
     """YouTube-style modern rounded subtitle defaults (720p reference)."""
 
-    font_name: str = "Noto Sans TC"
+    font_name: str = ""  # Select a regional Noto Sans font when empty.
     font_name_tc: str = "Noto Sans TC"
     font_name_sc: str = "Noto Sans SC"
     font_name_en: str = "Noto Sans"
@@ -30,7 +31,7 @@ class RoundedBgStyle:
     padding_h: int = 24  # 水平内边距
     padding_v: int = 12  # 垂直内边距
     margin_bottom: int = 58  # 720p 的约 8%
-    line_spacing: int = 12  # 约 1.3 倍行高
+    line_spacing: Optional[int] = None  # Use line_height_ratio when unset.
     line_height_ratio: float = 1.3
     letter_spacing: int = 0  # 字符间距
     max_lines: int = 2

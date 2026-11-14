@@ -6,8 +6,8 @@ setlocal EnableDelayedExpansion
 :: Usage: Download and run this script, or run from project directory
 
 :: Configuration
-set "REPO_URL=https://github.com/WEIFENG2333/VideoCaptioner.git"
-if not defined VIDEOCAPTIONER_HOME set "INSTALL_DIR=%USERPROFILE%\VideoCaptioner"
+set "REPO_URL=https://github.com/ckbenimaru/momovideo-translator.git"
+if not defined VIDEOCAPTIONER_HOME set "INSTALL_DIR=%USERPROFILE%\momovideo-translator"
 if defined VIDEOCAPTIONER_HOME set "INSTALL_DIR=%VIDEOCAPTIONER_HOME%"
 
 echo.
@@ -17,7 +17,7 @@ echo ==================================
 echo.
 
 :: Check if running from project directory (current dir)
-if exist "pyproject.toml" if exist "pyproject.toml" if exist "videocaptioner" (
+if exist "pyproject.toml" if exist "videocaptioner" (
     set "INSTALL_DIR=!CD!"
     echo [INFO] Running from project directory: !INSTALL_DIR!
     goto :after_detect
@@ -170,7 +170,7 @@ exit /b 0
 echo.
 echo [INFO] Starting VideoCaptioner...
 echo.
-uv run videocaptioner
+uv run videocaptioner-gui
 if !errorlevel! neq 0 (
     echo.
     echo Application exited with error.

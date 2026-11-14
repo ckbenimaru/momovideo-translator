@@ -19,6 +19,7 @@ FEEDBACK_URL = "https://github.com/ckbenimaru/momovideo-translator/issues"
 
 # Detect whether running from source tree or pip-installed
 _PACKAGE_DIR = Path(__file__).parent
+LOGO_PATH = _PACKAGE_DIR / "resources" / "logo.png"
 _PROJECT_ROOT = _PACKAGE_DIR.parent
 
 # Development mode: resource/ exists next to the package

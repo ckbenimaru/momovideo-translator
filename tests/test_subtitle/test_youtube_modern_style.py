@@ -1,14 +1,17 @@
+import json
 import unittest
+from dataclasses import replace
 
 from videocaptioner.core.subtitle.rounded_renderer import (
     _fit_text_lines,
     _font_name_for_text,
     render_subtitle_image,
 )
-from videocaptioner.core.subtitle.style_manager import SubtitleStyle
+from videocaptioner.core.subtitle.style_manager import SubtitleStyle, ensure_youtube_modern_styles
 from videocaptioner.core.subtitle.styles import RoundedBgStyle
 from videocaptioner.core.subtitle.text_utils import hex_to_rgba
 from videocaptioner.core.translate.types import TargetLanguage
+from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.task_factory import TaskFactory
 
 
@@ -28,12 +31,18 @@ class YouTubeModernStyleTests(unittest.TestCase):
         self.assertEqual(self.style.margin_bottom, 58)
 
     def test_language_specific_noto_fonts(self):
-        self.assertEqual(_font_name_for_text("這是繁體中文", self.style), "Noto Sans TC")
-        self.assertEqual(_font_name_for_text("这是简体中文", self.style), "Noto Sans SC")
+        auto_style = replace(self.style, font_name="")
+        self.assertEqual(_font_name_for_text("這是繁體中文", auto_style), "Noto Sans TC")
+        self.assertEqual(_font_name_for_text("这是简体中文", auto_style), "Noto Sans SC")
         self.assertEqual(
-            _font_name_for_text("This is an English subtitle", self.style),
+            _font_name_for_text("This is an English subtitle", auto_style),
             "Noto Sans",
         )
+
+    def test_explicit_rounded_font_overrides_automatic_font_selection(self):
+        style = replace(self.style, font_name="LXGW WenKai")
+        for text in ("這是繁體中文", "这是简体中文", "English subtitle"):
+            self.assertEqual(_font_name_for_text(text, style), "LXGW WenKai")
 
     def test_ass_style_defaults_to_noto_sans_tc(self):
         ass_style = SubtitleStyle(name="youtube-modern").to_ass_string()
@@ -112,3 +121,27 @@ class YouTubeModernStyleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_rounded_font_size_is_used_by_synthesis_and_preset_refresh(tmp_path, monkeypatch):
+    ensure_youtube_modern_styles(tmp_path)
+    preset = tmp_path / "rounded-youtube-modern.json"
+    settings = json.loads(preset.read_text())
+    assert settings["font_size"] == 42
+    settings["font_size"] = 30
+    preset.write_text(json.dumps(settings))
+    ensure_youtube_modern_styles(tmp_path)
+    assert json.loads(preset.read_text())["font_size"] == 30
+
+    monkeypatch.setattr(cfg.subtitle_style_name, "value", "youtube-modern")
+    monkeypatch.setattr(cfg.use_subtitle_style, "value", True)
+    sizes = []
+    for size in (42, 30):
+        monkeypatch.setattr(cfg.rounded_bg_font_size, "value", size)
+        task = TaskFactory.create_synthesis_task("video.mov", "video.srt")
+        assert task.synthesis_config.rounded_style["font_size"] == size
+        style = RoundedBgStyle(**task.synthesis_config.rounded_style)
+        bounds = render_subtitle_image("字幕字級測試", "", 1280, 720, style).getbbox()
+        assert bounds is not None
+        sizes.append(bounds[2] - bounds[0])
+    assert sizes[1] < sizes[0]

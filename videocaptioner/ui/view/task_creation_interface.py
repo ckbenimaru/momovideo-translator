@@ -24,7 +24,7 @@ from qfluentwidgets import (
     ToolButton,
 )
 
-from videocaptioner.config import APPDATA_PATH, ASSETS_PATH, VERSION
+from videocaptioner.config import APPDATA_PATH, LOGO_PATH, VERSION
 from videocaptioner.core.constant import (
     INFOBAR_DURATION_ERROR,
     INFOBAR_DURATION_INFO,
@@ -39,8 +39,6 @@ from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.components.DonateDialog import DonateDialog
 from videocaptioner.ui.thread.video_download_thread import VideoDownloadThread
 from videocaptioner.ui.view.log_window import LogWindow
-
-LOGO_PATH = ASSETS_PATH / "logo.png"
 
 
 class TaskCreationInterface(QWidget):

@@ -8,6 +8,7 @@ on:
       - dev
     paths:
       - "docs/**"
+      - "videocaptioner/resources/logo.png"
       - ".github/workflows/deploy-docs.yml"
   workflow_dispatch:
 
@@ -38,9 +39,18 @@ jobs:
         run: npm ci
         working-directory: docs
 
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: false
+
       - name: Build documentation
         run: npm run docs:build
         working-directory: docs
+        env:
+          DOCS_BASE: ${{ steps.pages.outputs.base_path }}/
+          DOCS_URL: ${{ steps.pages.outputs.base_url }}/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

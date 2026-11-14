@@ -16,7 +16,6 @@ from typing import Iterable, List, Sequence
 from videocaptioner.core.asr.asr_data import ASRData, ASRDataSeg
 from videocaptioner.core.utils.text_utils import is_mainly_cjk
 
-
 SENTENCE_END = frozenset(".!?。！？…")
 WEAK_END = frozenset(",;:，；：、")
 NO_SPACE_BEFORE = SENTENCE_END | WEAK_END | frozenset(")]}>〉》」』】〕〗〙〛")

@@ -1,7 +1,7 @@
 import webbrowser
 
 from PyQt5.QtCore import Qt, QThread, QUrl, pyqtSignal
-from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtGui import QDesktopServices, QIcon
 from PyQt5.QtWidgets import QFileDialog, QLabel, QWidget
 from qfluentwidgets import (
     ComboBoxSettingCard,
@@ -21,7 +21,15 @@ from qfluentwidgets import (
 )
 from qfluentwidgets import FluentIcon as FIF
 
-from videocaptioner.config import AUTHOR, FEEDBACK_URL, HELP_URL, RELEASE_URL, VERSION, YEAR
+from videocaptioner.config import (
+    AUTHOR,
+    FEEDBACK_URL,
+    HELP_URL,
+    LOGO_PATH,
+    RELEASE_URL,
+    VERSION,
+    YEAR,
+)
 from videocaptioner.core.constant import (
     INFOBAR_DURATION_ERROR,
     INFOBAR_DURATION_SUCCESS,
@@ -224,7 +232,7 @@ class SettingInterface(ScrollArea):
         )
         self.aboutCard = PrimaryPushSettingCard(
             self.tr("检查更新"),
-            FIF.INFO,
+            QIcon(str(LOGO_PATH)),
             self.tr("关于"),
             "© "
             + self.tr("版权所有")

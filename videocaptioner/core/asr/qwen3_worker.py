@@ -11,7 +11,6 @@ import re
 import tempfile
 from pathlib import Path
 
-
 LANGUAGE_NAMES = {
     "zh": "Chinese",
     "en": "English",
@@ -24,6 +23,29 @@ LANGUAGE_NAMES = {
     "pt": "Portuguese",
     "ru": "Russian",
     "es": "Spanish",
+}
+
+MLX_LANGUAGE_NAMES = {
+    **LANGUAGE_NAMES,
+    "ar": "Arabic",
+    "cs": "Czech",
+    "da": "Danish",
+    "el": "Greek",
+    "fa": "Persian",
+    "fi": "Finnish",
+    "hu": "Hungarian",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "mk": "Macedonian",
+    "ms": "Malay",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "ro": "Romanian",
+    "sv": "Swedish",
+    "th": "Thai",
+    "tl": "Filipino",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
 }
 
 
@@ -199,6 +221,167 @@ def release_model(model, processor=None) -> None:
         pass
 
 
+def run_mlx(args) -> dict:
+    import librosa
+    import mlx.core as mx
+    import soundfile as sf
+    from mlx_audio.stt import load
+
+    emit_progress(2, "读取音频并检测静音边界")
+    # The desktop transcription task supplies 16 kHz mono WAV.
+    audio, sample_rate = sf.read(args.audio, dtype="float32", always_2d=True)
+    audio = audio.mean(axis=1)
+    if sample_rate != 16000:
+        audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+        sample_rate = 16000
+    chunk_limit = min(args.chunk_seconds, 20) if not args.language else args.chunk_seconds
+    chunk_ranges = build_speech_chunks(audio, sample_rate, chunk_limit)
+    if not chunk_ranges:
+        return {"segments": [], "language": args.language or "", "languages": []}
+
+    emit_progress(8, "载入 Qwen3-ASR (MLX)")
+    model = load(args.asr_model)
+    language = MLX_LANGUAGE_NAMES.get(args.language, args.language) or None
+    if language and language.casefold() not in {
+        name.casefold() for name in model.config.support_languages
+    }:
+        raise ValueError(f"Qwen3-ASR 不支持指定语言 {language}，请使用自动检测或选择支持的语言。")
+    transcripts = []
+    total = len(chunk_ranges)
+    for index, (start, end) in enumerate(chunk_ranges):
+        emit_progress(10 + 45 * index // total, f"Qwen3-ASR 转录 {index + 1}/{total}")
+        duration = (end - start) / sample_rate
+        result = model.generate(
+            audio[start:end],
+            language=language,
+            max_tokens=max(48, min(2048, int(duration * 8) + 16)),
+            repetition_penalty=1.1,
+            min_chunk_duration=0,
+        )
+        detected = result.segments[0].get("language") if result.segments else None
+        text = result.text.strip()
+        # Sustained vocalizations in music can produce dozens of identical
+        # tokens and cause the aligner to assign most of them the same time.
+        units = re.findall(r"[^\W_]+", text.casefold())
+        if len(units) >= 2 and len(set(units)) == 1 and units[0] in {"oh", "ooh", "ah", "uh"}:
+            text = f"{units[0].capitalize()}, {units[0]}."
+        transcripts.append({"text": text, "language": detected or language or ""})
+    del model
+    gc.collect()
+    mx.clear_cache()
+
+    aligner = None
+    if args.aligner_model:
+        emit_progress(58, "载入 Qwen3 Forced Aligner (MLX)")
+        aligner = load(args.aligner_model)
+    supported = set(aligner.get_supported_languages() or ()) if aligner else set()
+    segments = []
+    aligned_chunks = 0
+    estimated_chunks = 0
+    for index, ((start, end), transcript) in enumerate(zip(chunk_ranges, transcripts)):
+        progress = 60 + 35 * index // total
+        emit_progress(progress, f"字幕时间轴对齐 {index + 1}/{total}")
+        text, detected = transcript["text"], transcript["language"]
+        if not text:
+            continue
+        offset, limit = start / sample_rate, end / sample_rate
+        timestamps = []
+        align_language = detected.casefold()
+        if align_language in {"cantonese", "english"} and re.search(r"[\u3400-\u9fff]", text):
+            # The aligner's Chinese tokenizer keeps Han characters and Latin
+            # words separate even when both occur within the same chunk.
+            align_language = "chinese"
+        if aligner and align_language in supported:
+            timestamps = try_mlx_alignment(
+                aligner, audio[start:end], text, align_language, offset, limit, index + 1, progress
+            )
+        if timestamps:
+            aligned_chunks += 1
+        else:
+            estimated_chunks += 1
+            # Keep punctuation attached to a word in the estimated transcript.
+            timestamps = mlx_fallback_segments(text, offset, limit)
+        segments.extend({**item, "language": detected} for item in timestamps)
+
+    emit_progress(98, f"整理 Qwen3-ASR 时间戳（对齐 {aligned_chunks} 段，估算 {estimated_chunks} 段）")
+    overall, languages = detected_language_summary(
+        [transcript for transcript in transcripts if transcript["text"]]
+    )
+    return {
+        "segments": deduplicate_overlapping_segments(segments),
+        "language": overall,
+        "languages": languages,
+        "aligned_chunks": aligned_chunks,
+        "estimated_chunks": estimated_chunks,
+    }
+
+
+def try_mlx_alignment(aligner, audio, text, language, offset, limit, chunk_number, progress):
+    try:
+        result = aligner.generate(audio, text=text, language=language)
+    except ImportError as error:
+        emit_progress(
+            progress,
+            f"第 {chunk_number} 段（{language}）缺少對齊依賴，使用估算時間：{error}",
+        )
+        return []
+    return mlx_aligned_segments(text, result, offset, limit)
+
+
+def mlx_aligned_segments(text, alignment, offset: float, limit: float) -> list[dict]:
+    """Restore punctuation omitted by the aligner and bound times to the clip."""
+    segments = []
+    cursor = 0
+    for item in alignment:
+        index = text.find(item.text, cursor)
+        if not item.text or index < 0 or any(char.isalnum() for char in text[cursor:index]):
+            return []
+        if segments:
+            segments[-1]["text"] += text[cursor:index].rstrip()
+        start = min(limit, max(offset, offset + item.start_time))
+        end = min(limit, max(start, offset + item.end_time))
+        segments.append({
+            "text": text[:index] + item.text if not segments else item.text,
+            "start_time": start,
+            "end_time": end,
+        })
+        cursor = index + len(item.text)
+    if any(char.isalnum() for char in text[cursor:]):
+        return []
+    if segments and (
+        any(item["end_time"] - item["start_time"] > 6 for item in segments)
+        or sum(item["end_time"] <= item["start_time"] for item in segments) * 2 > len(segments)
+    ):
+        return []
+    if segments:
+        segments[-1]["text"] += text[cursor:]
+    return segments
+
+
+def mlx_fallback_segments(text: str, start: float, end: float) -> list[dict]:
+    units = re.findall(r"[\u3400-\u9fff]|[^\W_]+(?:['’][^\W_]+)*|[^\s]", text)
+    words = []
+    leading = ""
+    for unit in units:
+        if any(char.isalnum() for char in unit):
+            words.append(leading + unit)
+            leading = ""
+        elif words:
+            words[-1] += unit
+        else:
+            leading += unit
+    if not words:
+        return []
+    # The estimated times only have chunk precision. Give the phrase an
+    # ordinary cue duration when a short transcript spans a long chunk.
+    duration = min(end - start, max(3.5, len(words) * 0.65))
+    step = duration / len(words)
+    return [
+        {"text": word, "start_time": start + i * step, "end_time": start + (i + 1) * step}
+        for i, word in enumerate(words)
+    ]
+
+
 def run(args) -> dict:
     import librosa
     import soundfile as sf
@@ -357,10 +540,10 @@ def main() -> int:
     parser.add_argument("--aligner-model", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--language", default="")
-    parser.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
+    parser.add_argument("--device", choices=["cuda", "cpu", "mlx"], default="cuda")
     parser.add_argument("--chunk-seconds", type=int, default=30)
     args = parser.parse_args()
-    result = run(args)
+    result = run_mlx(args) if args.device == "mlx" else run(args)
     Path(args.output).write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
     )

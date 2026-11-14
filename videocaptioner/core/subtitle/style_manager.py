@@ -283,6 +283,8 @@ def ensure_youtube_modern_styles(styles_dir: Optional[Path] = None) -> None:
 
     for path, data in ((ass_path, ass_data), (rounded_path, rounded_data)):
         serialized = json.dumps(data, ensure_ascii=False, indent=2)
+        if path == rounded_path and path.exists():
+            continue
         if not path.exists() or path.read_text(encoding="utf-8") != serialized:
             path.write_text(serialized, encoding="utf-8")
 

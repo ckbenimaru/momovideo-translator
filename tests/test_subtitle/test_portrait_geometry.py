@@ -10,6 +10,7 @@ from videocaptioner.core.subtitle.geometry import (
     probe_display_geometry,
 )
 from videocaptioner.core.subtitle.rounded_renderer import (
+    _get_video_info,
     _scale_style_for_geometry,
     render_subtitle_image,
 )
@@ -33,6 +34,20 @@ def style_fields(style_text: str) -> list[str]:
 
 
 class PortraitGeometryTests(unittest.TestCase):
+    @patch("videocaptioner.core.subtitle.rounded_renderer.probe_display_geometry")
+    @patch("videocaptioner.core.subtitle.rounded_renderer.subprocess.run")
+    def test_rounded_video_info_prefers_probe_and_checks_fallback(self, run, probe):
+        run.return_value = subprocess.CompletedProcess(
+            ["ffmpeg"], 1, "", "Duration: 00:00:12.50\nStream #0:0: Video: h264, 1920x1080"
+        )
+        probe.return_value = (1080, 1920)
+        self.assertEqual(_get_video_info("phone.mov"), (1080, 1920, 12.5))
+        probe.side_effect = RuntimeError("ffprobe failed")
+        self.assertEqual(_get_video_info("phone.mov"), (1920, 1080, 12.5))
+        run.return_value.stderr = "Invalid data found when processing input"
+        with self.assertRaisesRegex(ValueError, "Cannot get video resolution"):
+            _get_video_info("phone.mov")
+
     def test_landscape_keeps_existing_height_scale(self):
         geometry = calculate_subtitle_geometry(1920, 1080)
         self.assertFalse(geometry.is_portrait)

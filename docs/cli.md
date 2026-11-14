@@ -3,10 +3,12 @@
 ## 安装
 
 ```bash
-pip install videocaptioner          # CLI + GUI 桌面版
+git clone https://github.com/ckbenimaru/momovideo-translator.git
+cd momovideo-translator
+uv sync
 ```
 
-免费功能（转录、必应/谷歌翻译）无需任何配置，安装后直接使用。
+示例可在仓库中使用 `uv run videocaptioner` 执行。必剪／剪映会上传音频，必应／谷歌会发送字幕文本。需要离线时，请在桌面版选择本机 Qwen3-ASR 与 Ollama，或在 CLI 使用已配置的 WhisperCpp。
 需要桌面版时运行 `videocaptioner-gui`、`videocaptioner gui`，或直接运行无参数的 `videocaptioner`。
 
 ---
@@ -18,10 +20,10 @@ pip install videocaptioner          # CLI + GUI 桌面版
 videocaptioner transcribe video.mp4 --asr bijian
 
 # 翻译字幕（免费必应翻译）
-videocaptioner subtitle input.srt --translator bing --target-language en
+videocaptioner subtitle input.srt --no-optimize --translator bing --target-language en
 
-# 全流程：转录 → 优化 → 翻译 → 合成
-videocaptioner process video.mp4 --asr bijian --translator bing --target-language ja
+# 全流程：在线转录 → 翻译 → 合成
+videocaptioner process video.mp4 --asr bijian --no-optimize --translator bing --target-language ja
 
 # 给视频加字幕
 videocaptioner synthesize video.mp4 -s subtitle.srt --subtitle-mode hard
@@ -30,7 +32,7 @@ videocaptioner synthesize video.mp4 -s subtitle.srt --subtitle-mode hard
 videocaptioner dub subtitle.srt --preset siliconflow-cn-female -o dub.wav
 
 # 全流程：视频 → 转录 → 翻译 → 配音视频
-videocaptioner process video.mp4 --translator bing --to zh-Hans \
+videocaptioner process video.mp4 --no-optimize --translator bing --to zh-Hans \
   --dub-only --preset siliconflow-cn-female
 ```
 

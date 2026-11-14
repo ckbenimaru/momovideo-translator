@@ -262,7 +262,7 @@ def _parse_value(raw: str, key: str) -> Any:
 def save_config_value(key: str, value: str, config_path: Optional[Path] = None) -> None:
     """Set a single value in the config file. Creates the file if it doesn't exist."""
     path = config_path or CONFIG_FILE
-    ensure_config_dir()
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     existing = load_config_file(path)
     _set_nested(existing, key, _parse_value(value, key))

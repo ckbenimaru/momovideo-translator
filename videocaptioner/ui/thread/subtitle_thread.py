@@ -1,5 +1,7 @@
 import os
+from concurrent.futures import CancelledError
 from pathlib import Path
+from threading import Event
 from typing import List
 
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -29,10 +31,11 @@ from videocaptioner.core.subtitle.resegment import (
 from videocaptioner.core.translate.factory import TranslatorFactory
 from videocaptioner.core.translate.ollama_runtime import (
     is_local_ollama_url,
+    log_ollama_model_placement,
     prepare_local_ollama,
     release_ollama_model,
 )
-from videocaptioner.core.translate.types import TranslatorType
+from videocaptioner.core.translate.types import TranslatorType, translation_needs_review
 from videocaptioner.core.utils.logger import setup_logger
 
 SERVICE_TO_TYPE = {
@@ -76,14 +79,20 @@ class SubtitleThread(QThread):
     update = pyqtSignal(dict)
     update_all = pyqtSignal(dict)
     error = pyqtSignal(str)
+    cancelled = pyqtSignal()
+    partial = pyqtSignal(dict)
 
-    def __init__(self, task: SubtitleTask):
+    def __init__(
+        self, task: SubtitleTask, *, input_data: ASRData | None = None, allow_partial: bool = False
+    ):
         super().__init__()
         self.task: SubtitleTask = task
+        self.input_data = input_data
+        self.allow_partial = allow_partial
         self.subtitle_length = 0
         self.finished_subtitle_length = 0
         self.custom_prompt_text = ""
-        self.optimizer = None
+        self._cancel_requested = Event()
 
     def set_custom_prompt_text(self, text: str):
         self.custom_prompt_text = text
@@ -96,14 +105,15 @@ class SubtitleThread(QThread):
         if config.base_url and config.api_key and config.llm_model:
             if is_local_ollama_url(config.base_url):
                 self.progress.emit(2, self.tr("正在啟動 Qwen3 離線翻譯..."))
-                prepare_local_ollama(config.llm_model)
-            success, message = check_llm_connection(
-                config.base_url,
-                config.api_key,
-                config.llm_model,
-            )
-            if not success:
-                raise Exception(f"{self.tr('LLM API 测试失败: ')}{message or ''}")
+                prepare_local_ollama(config.llm_model, parallelism=config.thread_num)
+            else:
+                success, message = check_llm_connection(
+                    config.base_url,
+                    config.api_key,
+                    config.llm_model,
+                )
+                if not success:
+                    raise Exception(f"{self.tr('LLM API 测试失败: ')}{message or ''}")
             os.environ["OPENAI_BASE_URL"] = config.base_url
             os.environ["OPENAI_API_KEY"] = config.api_key
             reset_llm_client()
@@ -112,6 +122,9 @@ class SubtitleThread(QThread):
             raise Exception(self.tr("LLM API 未配置, 请检查LLM配置"))
 
     def run(self):
+        if self._cancel_requested.is_set():
+            self.cancelled.emit()
+            return
         # 设置任务上下文
         task_file = (
             Path(self.task.video_path) if self.task.video_path else Path(self.task.subtitle_path)
@@ -122,7 +135,11 @@ class SubtitleThread(QThread):
             stage="subtitle",
         )
 
+        uses_local_ollama = False
+        completed = False
+        partial_data = None
         try:
+            self._check_cancelled()
             logger.info(f"\n{self.task.subtitle_config.print_config()}")
 
             # 字幕文件路径检查、对断句字幕路径进行定义
@@ -131,8 +148,15 @@ class SubtitleThread(QThread):
 
             subtitle_config = self.task.subtitle_config
             assert subtitle_config is not None, self.tr("字幕配置为空")
+            if (
+                subtitle_config.subtitle_layout is SubtitleLayoutEnum.ONLY_TRANSLATE
+                and not subtitle_config.need_translate
+            ):
+                raise ValueError(self.tr("「僅譯文」需要啟用字幕翻譯。"))
 
-            asr_data = ASRData.from_subtitle_file(subtitle_path)
+            asr_data = self.input_data
+            if asr_data is None:
+                asr_data = ASRData.from_subtitle_file(subtitle_path)
 
             # 1. 分割成字词级时间戳（对于非断句字幕且开启分割选项）
             if subtitle_config.need_split and not asr_data.is_word_timestamp():
@@ -143,6 +167,8 @@ class SubtitleThread(QThread):
             if self.need_llm(subtitle_config, asr_data):
                 self.progress.emit(2, self.tr("开始验证 LLM 配置..."))
                 subtitle_config = self._setup_llm_config()
+                uses_local_ollama = is_local_ollama_url(subtitle_config.base_url)
+            self._check_cancelled()
 
             # 2. 重新断句（对于字词级字幕）
             if asr_data.is_word_timestamp():
@@ -155,7 +181,11 @@ class SubtitleThread(QThread):
                     max_word_count_cjk=subtitle_config.max_word_count_cjk,
                     max_word_count_english=subtitle_config.max_word_count_english,
                 )
-                asr_data = splitter.split_subtitle(asr_data)
+                try:
+                    asr_data = splitter.split_subtitle(asr_data)
+                finally:
+                    splitter.stop()
+                self._check_cancelled()
                 self.update_all.emit(asr_data.to_json())
 
             # 3. 优化字幕
@@ -175,9 +205,13 @@ class SubtitleThread(QThread):
                     batch_num=subtitle_config.batch_size,
                     model=subtitle_config.llm_model,
                     custom_prompt=custom_prompt or "",
-                    update_callback=self.callback,
+                    update_callback=self._update_progress,
                 )
-                asr_data = optimizer.optimize_subtitle(asr_data)
+                try:
+                    asr_data = optimizer.optimize_subtitle(asr_data)
+                finally:
+                    optimizer.stop()
+                self._check_cancelled()
                 asr_data.remove_punctuation()
                 self.update_all.emit(asr_data.to_json())
 
@@ -195,18 +229,32 @@ class SubtitleThread(QThread):
                     subtitle_config, custom_prompt, self.callback
                 )
 
-                asr_data = translator.translate_subtitle(asr_data)
+                try:
+                    asr_data = translator.translate_subtitle(
+                        asr_data, cancel_event=self._cancel_requested, allow_partial=self.allow_partial
+                    )
+                finally:
+                    translator.stop(wait=True)
+                self._check_cancelled()
+                if self.allow_partial and any(
+                    cue.text.strip() and translation_needs_review(cue.translated_text)
+                    for cue in asr_data.segments
+                ):
+                    partial_data = asr_data.to_json()
+                    return
                 # Re-check translated cue duration, reading speed and line
                 # wrapping. Overlong text is split at punctuation, not cut.
                 asr_data = resegment_translations(
                     asr_data, config_from_object(subtitle_config)
                 )
+                self._check_cancelled()
 
                 # 移除末尾标点符号
                 asr_data.remove_punctuation()
                 self.update_all.emit(asr_data.to_json())
 
                 # 保存翻译结果(单语、双语)
+                self._check_cancelled()
                 if self.task.need_next_task and self.task.video_path:
                     for layout in SubtitleLayoutEnum:
                         save_path = str(
@@ -221,10 +269,11 @@ class SubtitleThread(QThread):
                         logger.info(f"翻译字幕保存到：{save_path}")
 
             # 5. 保存字幕
+            self._check_cancelled()
             asr_data.save(
                 save_path=self.task.output_path or "",
                 ass_style=subtitle_config.subtitle_style or "",
-                layout=subtitle_config.subtitle_layout or SubtitleLayoutEnum.ONLY_TRANSLATE,
+                layout=subtitle_config.subtitle_layout or SubtitleLayoutEnum.ONLY_ORIGINAL,
             )
             logger.info(f"字幕保存到 {self.task.output_path}")
 
@@ -247,19 +296,30 @@ class SubtitleThread(QThread):
                     style_str=subtitle_config.subtitle_style,
                 )
 
-            self.progress.emit(100, self.tr("优化完成"))
-            logger.info("优化完成")
-            self.finished.emit(self.task.video_path, self.task.output_path)
+            completed = True
 
+        except CancelledError:
+            logger.info("字幕處理已取消")
         except Exception as e:
-            logger.exception(f"字幕处理失败: {str(e)}")
-            self.error.emit(str(e))
-            self.progress.emit(100, self.tr("字幕处理失败"))
+            if not self._cancel_requested.is_set():
+                logger.exception(f"字幕处理失败: {str(e)}")
+                self.error.emit(str(e))
+                self.progress.emit(100, self.tr("字幕处理失败"))
         finally:
             config = self.task.subtitle_config
-            if config and is_local_ollama_url(config.base_url):
-                release_ollama_model(config.llm_model or "")
+            if uses_local_ollama and config and config.llm_model:
+                log_ollama_model_placement(config.llm_model)
+                release_ollama_model(config.llm_model)
             clear_task_context()
+            if self._cancel_requested.is_set():
+                self.cancelled.emit()
+            elif partial_data is not None:
+                self.partial.emit(partial_data)
+            elif completed:
+                status = self.tr("翻譯完成") if config and config.need_translate else self.tr("字幕處理完成")
+                self.progress.emit(100, status)
+                logger.info(status)
+                self.finished.emit(self.task.video_path, self.task.output_path)
 
     def need_llm(self, subtitle_config: SubtitleConfig, asr_data: ASRData):
         return (
@@ -276,40 +336,27 @@ class SubtitleThread(QThread):
             )
         )
 
-    def callback(self, result: List[SubtitleProcessData]):
+    def _update_progress(self, result: List[SubtitleProcessData]):
+        if self._cancel_requested.is_set():
+            return
         self.finished_subtitle_length += len(result)
         # 简单计算当前进度（0-100%）
         progress = min(int((self.finished_subtitle_length / max(self.subtitle_length, 1)) * 100), 100)
         self.progress.emit(progress, self.tr("{0}% 处理字幕").format(progress))
-        # 转换为字典格式供UI使用
-        result_dict = {
-            str(data.index): data.translated_text or data.optimized_text or data.original_text
-            for data in result
-        }
-        self.update.emit(result_dict)
+
+    def callback(self, result: List[SubtitleProcessData]):
+        if self._cancel_requested.is_set():
+            return
+        self._update_progress(result)
+        self.update.emit({str(data.index): data.translated_text for data in result})
+
+    def _check_cancelled(self):
+        if self._cancel_requested.is_set():
+            raise CancelledError()
 
     def stop(self):
-        """停止所有处理"""
-        try:
-            # 先停止优化器
-            if hasattr(self, "optimizer") and self.optimizer:
-                try:
-                    self.optimizer.stop()  # type: ignore
-                except Exception as e:
-                    logger.error(f"停止优化器时出错：{str(e)}")
-
-            # 终止线程
-            self.terminate()
-            # 等待最多3秒
-            if not self.wait(3000):
-                logger.warning("线程未能在3秒内正常停止")
-
-            # 发送进度信号
-            self.progress.emit(100, self.tr("已终止"))
-
-        except Exception as e:
-            logger.error(f"停止线程时出错：{str(e)}")
-            self.progress.emit(100, self.tr("终止时发生错误"))
+        """Request cancellation and let the worker release its own resources."""
+        self._cancel_requested.set()
 
 
 class RetranslateThread(QThread):
@@ -319,7 +366,14 @@ class RetranslateThread(QThread):
     progress = pyqtSignal(int, str)  # (百分比, 状态描述)
     error = pyqtSignal(str)
 
-    def __init__(self, selected_data: dict, subtitle_config: SubtitleConfig, file_name: str = ""):
+    def __init__(
+        self,
+        selected_data: dict,
+        subtitle_config: SubtitleConfig,
+        file_name: str = "",
+        *,
+        context_by_row: dict[str, tuple[str, str]] | None = None,
+    ):
         """
         selected_data: model._data 中选中的条目，键为行号字符串
         subtitle_config: 当前任务配置
@@ -329,10 +383,17 @@ class RetranslateThread(QThread):
         self.selected_data = selected_data
         self.subtitle_config = subtitle_config
         self.file_name = file_name
+        self.context_by_row = context_by_row or {}
         self.total = len(selected_data)
         self.done = 0
+        self._cancel_requested = Event()
+
+    def stop(self):
+        self._cancel_requested.set()
 
     def _callback(self, result: List[SubtitleProcessData]):
+        if self._cancel_requested.is_set():
+            return
         self.done += len(result)
         pct = min(int(self.done / self.total * 100), 100)
         self.progress.emit(pct, self.tr("{0}% 翻译中").format(pct))
@@ -343,7 +404,11 @@ class RetranslateThread(QThread):
             file_name=self.file_name,
             stage="translate",
         )
+        result = None
+        uses_local_ollama = False
         try:
+            if self._cancel_requested.is_set():
+                return
             config = self.subtitle_config
             if not config.target_language:
                 raise Exception("目标语言未配置")
@@ -353,7 +418,8 @@ class RetranslateThread(QThread):
                 if not (config.base_url and config.api_key and config.llm_model):
                     raise Exception("LLM API 未配置，请检查 LLM 配置")
                 if is_local_ollama_url(config.base_url):
-                    prepare_local_ollama(config.llm_model)
+                    prepare_local_ollama(config.llm_model, parallelism=config.thread_num)
+                    uses_local_ollama = True
                 os.environ["OPENAI_BASE_URL"] = config.base_url
                 os.environ["OPENAI_API_KEY"] = config.api_key
                 reset_llm_client()
@@ -362,22 +428,46 @@ class RetranslateThread(QThread):
             asr_data = ASRData.from_json(self.selected_data)
 
             # 创建翻译器并翻译
-            translator = create_translator_from_config(config, callback=self._callback)
-            asr_data = translator.translate_subtitle(asr_data)
+            keys = sorted(self.selected_data, key=int)
+            context_by_index = {
+                index: self.context_by_row[key]
+                for index, key in enumerate(keys, 1)
+                if key in self.context_by_row
+            }
+            translator = create_translator_from_config(
+                config, config.custom_prompt_text or "", callback=self._callback
+            )
+            try:
+                asr_data = translator.translate_subtitle(
+                    asr_data,
+                    context_by_index=context_by_index,
+                    cancel_event=self._cancel_requested,
+                    allow_partial=True,
+                    force_retry=True,
+                )
+            finally:
+                translator.stop(wait=True)
 
             # 构建 {原始行号: translated_text} 映射
-            keys = list(self.selected_data.keys())
             result = {
                 keys[i]: seg.translated_text
                 for i, seg in enumerate(asr_data.segments)
+                if seg.translated_text.strip()
+                and (
+                    not translation_needs_review(seg.translated_text)
+                    or not self.selected_data[keys[i]]["translated_subtitle"].strip()
+                )
             }
-            self.finished.emit(result)
-
+        except CancelledError:
+            pass
         except Exception as e:
-            logger.exception(f"重新翻译失败: {e}")
-            self.error.emit(str(e))
+            if not self._cancel_requested.is_set():
+                logger.exception(f"重新翻译失败: {e}")
+                self.error.emit(str(e))
         finally:
             config = self.subtitle_config
-            if is_local_ollama_url(config.base_url):
-                release_ollama_model(config.llm_model or "")
+            if uses_local_ollama and config.llm_model:
+                release_ollama_model(config.llm_model)
             clear_task_context()
+            if result is not None and not self._cancel_requested.is_set():
+                self.finished.emit(result)

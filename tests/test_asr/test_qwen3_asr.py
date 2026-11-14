@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from videocaptioner.core.asr.qwen3_asr import (
     QWEN_ALIGNER_DIR_NAME,
@@ -14,11 +16,39 @@ from videocaptioner.core.asr.qwen3_worker import (
     detected_language_summary,
     fallback_segments,
     group_speech_intervals,
+    mlx_aligned_segments,
+    mlx_fallback_segments,
+    try_mlx_alignment,
 )
 from videocaptioner.core.entities import TranscribeConfig
 
 
 class Qwen3ASRTests(unittest.TestCase):
+    def test_mlx_alignment_missing_tokenizer_uses_estimated_times(self):
+        aligner = Mock()
+        aligner.generate.side_effect = ImportError("Japanese tokenization requires nagisa")
+        result = try_mlx_alignment(aligner, None, "こんにちは", "japanese", 10, 12, 1, 60)
+        self.assertEqual(result, [])
+        estimates = mlx_fallback_segments("こんにちは", 10, 12)
+        self.assertEqual("".join(item["text"] for item in estimates), "こんにちは")
+        self.assertEqual(estimates[0]["start_time"], 10)
+        self.assertEqual(estimates[-1]["end_time"], 12)
+
+    def test_mlx_alignment_keeps_punctuation_and_rejects_missing_words(self):
+        alignment = [
+            SimpleNamespace(text="Hello", start_time=0.2, end_time=0.5),
+            SimpleNamespace(text="世界", start_time=0.6, end_time=1.0),
+        ]
+        segments = mlx_aligned_segments("Hello, 世界！", alignment, 10, 12)
+        self.assertEqual([segment["text"] for segment in segments], ["Hello,", "世界！"])
+        self.assertEqual(segments[0]["start_time"], 10.2)
+        self.assertEqual(mlx_aligned_segments("Hello there, 世界！", alignment, 10, 12), [])
+
+    def test_mlx_estimated_segments_keep_punctuation_with_words(self):
+        segments = mlx_fallback_segments("Don't stop. 季候風！", 10, 30)
+        self.assertEqual([segment["text"] for segment in segments], ["Don't", "stop.", "季", "候", "風！"])
+        self.assertTrue(10 < segments[-1]["end_time"] <= 30)
+
     def test_result_seconds_are_converted_to_milliseconds(self):
         engine = Qwen3ASR.__new__(Qwen3ASR)
         segments = engine._make_segments(
@@ -69,6 +99,7 @@ class Qwen3ASRTests(unittest.TestCase):
             engine.runtime_dir = runtime
             engine.model_dir = model_root
             engine.asr_model = "Qwen3-ASR-1.7B-hf"
+            engine.device = "cpu"
             engine.use_forced_aligner = True
             self.assertEqual(engine._validate_installation(), python)
 

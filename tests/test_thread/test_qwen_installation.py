@@ -45,12 +45,22 @@ class QwenInstallationTests(unittest.TestCase):
                 validate_qwen_model(target)
 
     def test_runtime_install_is_isolated_and_pins_transformers(self):
-        commands = qwen_runtime_commands("X:/QwenRuntime")
+        with patch("videocaptioner.ui.thread.qwen_runtime_thread.is_apple_silicon", return_value=False):
+            commands = qwen_runtime_commands("X:/QwenRuntime")
         self.assertIn("venv", commands[0])
         flattened = [item for command in commands for item in command]
         self.assertIn("transformers==5.14.1", flattened)
         self.assertTrue(any("torch" in item for item in flattened))
         self.assertIn("--no-cache-dir", flattened)
+
+    def test_apple_silicon_runtime_installs_mlx_instead_of_torch(self):
+        with patch("videocaptioner.ui.thread.qwen_runtime_thread.is_apple_silicon", return_value=True):
+            commands = qwen_runtime_commands("/tmp/QwenRuntime")
+        self.assertEqual(len(commands), 3)
+        self.assertIn("mlx-audio==0.6.5", commands[-1])
+        self.assertIn("nagisa==0.3.1", commands[-1])
+        self.assertIn("soynlp==0.0.493", commands[-1])
+        self.assertFalse(any("torch" in item for command in commands for item in command))
 
     def test_runtime_check_thread_reports_validation_result(self):
         results = []

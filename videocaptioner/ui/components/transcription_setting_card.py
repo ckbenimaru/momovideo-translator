@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
 from videocaptioner.core.entities import (
     TranscribeModelEnum,
 )
-from videocaptioner.core.utils.platform_utils import is_macos
+from videocaptioner.core.utils.platform_utils import is_macos, is_model_available
 
 from .WhisperAPISettingWidget import WhisperAPISettingWidget
 from .WhisperCppSettingWidget import WhisperCppSettingWidget
@@ -54,7 +54,7 @@ class TranscriptionSettingCard(QWidget):
         return self.faster_whisper_widget
 
     def _ensure_qwen3_asr_widget(self):
-        if self.qwen3_asr_widget is None and not is_macos():
+        if self.qwen3_asr_widget is None and is_model_available(TranscribeModelEnum.QWEN3_ASR):
             from .Qwen3ASRSettingWidget import Qwen3ASRSettingWidget
 
             self.qwen3_asr_widget = Qwen3ASRSettingWidget(self)

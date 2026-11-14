@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -7,7 +8,7 @@ import psutil
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from videocaptioner.core.asr.asr_data import ASRData
-from videocaptioner.core.entities import SynthesisTask
+from videocaptioner.core.entities import SubtitleLayoutEnum, SynthesisTask
 from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.video_utils import add_subtitles, add_subtitles_with_style
 
@@ -84,7 +85,17 @@ class VideoSynthesisThread(QThread):
             preset = video_quality.get_preset()
 
             # 读取字幕数据
-            asr_data = ASRData.from_subtitle_file(subtitle_file)
+            if subtitle_file.endswith(".momo-translation.json"):
+                review = json.loads(Path(subtitle_file).read_text(encoding="utf-8"))
+                asr_data = ASRData.from_json(review["subtitles"])
+                if config.subtitle_layout is SubtitleLayoutEnum.ONLY_TRANSLATE:
+                    asr_data = ASRData([
+                        cue for cue in asr_data.segments if cue.translated_text.strip()
+                    ])
+                    if not asr_data.segments:
+                        raise ValueError(self.tr("沒有可合成的譯文。"))
+            else:
+                asr_data = ASRData.from_subtitle_file(subtitle_file)
 
             if config.soft_subtitle:
                 # 软字幕：转为 SRT 后内嵌

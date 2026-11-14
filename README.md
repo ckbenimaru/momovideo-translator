@@ -1,5 +1,7 @@
 # momo 字幕助手
 
+<img src="videocaptioner/resources/logo.png" alt="momo 字幕助手" width="120">
+
 以 [VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner) 為基礎修改的本地影片轉錄、字幕翻譯及影片合成工具。
 
 本倉庫只保存核心原始碼及必要字型，不包含 Python 執行環境、FFmpeg、Faster-Whisper-XXL 程式、Qwen3-ASR 執行環境、Ollama、CUDA 元件或 AI 模型。這些大型元件由使用者按需要自行安裝或在軟體內下載。
@@ -19,31 +21,52 @@
 ## 系統需求
 
 - Windows 10／11 64 位元
+- macOS（Apple Silicon 可使用 MLX 本機轉錄）
 - Python 3.10、3.11 或 3.12
 - Git
 - FFmpeg（需要可從命令列執行 `ffmpeg` 與 `ffprobe`）
 - 建議使用 NVIDIA 顯示卡及近期驅動；沒有 NVIDIA 顯示卡時可使用 CPU／`libx264`
 
-目前 Faster-Whisper-XXL 與 Qwen3-ASR CUDA 流程主要針對 Windows。輸出的 H.264／AAC MP4 影片可在 macOS 使用，但這不代表本專案已提供完整的 macOS 語音轉錄環境。
+Faster-Whisper-XXL 與 Qwen3-ASR CUDA 是 Windows 的設定。Apple Silicon 使用下述 MLX 環境。
+
+## Apple Silicon 本機設定
+
+依下方「從原始碼安裝」開啟桌面程式後：
+
+1. 在轉錄模型中選擇 **Qwen3-ASR**，將後端設為 **MLX**，並在模型管理安裝獨立執行環境與 `Qwen3-ASR-1.7B-8bit`。需要詞級時間戳時，另下載 `Qwen3-ForcedAligner-0.6B-8bit` 並啟用對齊。
+2. 安裝 [Ollama](https://ollama.com/download/mac)，確認終端機能執行 `ollama`，開啟 Ollama 後執行 `ollama pull qwen3:4b-instruct-2507-q4_K_M`。
+3. 在 momo 的 LLM 設定選擇 **Ollama**，服務地址填 `http://127.0.0.1:11434/v1`。模型名稱填已下載或匯入的名稱，翻譯目標可設為「繁體中文」。
+
+24 GiB 以上的 Apple Silicon Mac 預設最多同時翻譯四條字幕，每個請求處理一條。程式自行啟動 Ollama 時使用 4096 token 上下文；已在執行的 Ollama 會沿用該服務的設定。
+
+字幕表出現「翻譯部分完成」時，可點「跳到待處理」查看缺譯或帶有 `［待確認］` 的字幕，再選「只重譯待處理」或手動校對。若選擇略過核對並合成，已翻譯的內容及其 `［待確認］` 標記仍會輸出。
+
+已另行配置 macOS Finder 啟動器的使用者可從「應用程式」開啟 momo。用原始碼開發時，設定和快取儲存在各自的 `AppData`。可在 Qwen3-ASR 設定指定其他模型目錄，或在啟動程式時用 `OLLAMA_MODELS` 指定 Ollama 模型目錄。
+
+## 品牌圖示
+
+`videocaptioner/resources/logo.png` 是 momo 的原始圖示，桌面程式、Python 安裝包和文件網站都從這個檔案讀取。日後更新品牌圖示只需維護這一份 PNG。
+
+若已安裝相容的 momo macOS 啟動器，先關閉 momo，再從原始碼目錄執行下列指令更新 Finder 圖示：
+
+```sh
+bash scripts/update-macos-icon.sh
+```
+
+更新 Finder 版內的圖示時，將 `videocaptioner/resources/logo.png` 和相關程式檔一起同步到安裝目錄。
 
 ## 從原始碼安裝
 
-建議先安裝 [uv](https://docs.astral.sh/uv/)，然後執行：
+先安裝 Git、[uv](https://docs.astral.sh/uv/) 和支援 libass 的 FFmpeg，並確認終端機能執行 `ffmpeg` 及 `ffprobe`。然後執行：
 
-```powershell
+```sh
 git clone https://github.com/ckbenimaru/momovideo-translator.git
 cd momovideo-translator
-uv sync
-uv run videocaptioner
+uv sync --locked
+uv run --no-sync videocaptioner-gui
 ```
 
-也可以明確啟動圖形介面：
-
-```powershell
-uv run videocaptioner-gui
-```
-
-本倉庫目前是原始碼版本，不是可攜式免安裝軟體包。
+此版本從原始碼安裝。GitHub 原始碼下載包含桌面程式與字型，Python 執行環境、模型及 macOS `.app` 啟動器需另行準備。
 
 ## Faster Whisper 與模型
 
@@ -65,7 +88,7 @@ AppData\models\faster-whisper-large-v3\
 
 這些目錄已由 `.gitignore` 排除，不會被意外提交。
 
-## Qwen3-ASR 與字幕時間軸
+## Windows Qwen3-ASR 與字幕時間軸
 
 在「轉錄模型」選擇 `Qwen3-ASR ✨` 後，模型頁面提供一鍵管理：
 
@@ -86,7 +109,7 @@ Qwen3-ASR 只負責離線語音辨識；辨識後的字幕會沿用 momo 現有�
 
 ## 預設離線翻譯
 
-momo 預設使用 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M` 翻譯字幕，建議將便攜環境與模型放在：
+momo 預設使用 Ollama 的 `qwen3:4b-instruct-2507-q4_K_M` 翻譯字幕。Windows 便攜環境與模型的建議位置為：
 
 ```text
 D:\AI\Ollama\ollama.exe
@@ -121,16 +144,20 @@ D:\AI\OllamaModels\
 
 ## 輸出影片
 
-硬字幕合成預設使用：
+桌面版預設輸出真正的 MP4，來源可以是 MOV、MP4 或其他受支援的格式。硬字幕合成使用：
 
 ```text
 容器：MP4
 影像：H.264 / AVC (avc1)
-音訊：AAC (mp4a)
+音訊：AAC-LC (mp4a)
 像素格式：yuv420p
 Fast Start：開啟
 輸出名稱：原檔名.done.mp4
 ```
+
+軟字幕會封裝成 MP4 的可選字幕軌。符合相容規格的 H.264 視訊和 AAC-LC 音軌會直接複製，其餘視訊或音軌會轉換。字幕軌的顯示由播放器決定。需要在 Mac 和 Windows 上都直接看到字幕時，請選擇硬字幕。
+
+若同一資料夾有同名但不同格式的來源影片，非 MP4 的輸出名稱會帶上原副檔名，例如 `clip.mov.done.mp4`，避免與 `clip.done.mp4` 相互覆蓋。
 
 ## 上游及授權
 

@@ -4,6 +4,9 @@
   "description": "Documentation site for VideoCaptioner",
   "private": true,
   "scripts": {
+    "docs:logo": "node -e \"require('node:fs').copyFileSync('../videocaptioner/resources/logo.png', 'public/logo.png')\"",
+    "predocs:dev": "npm run docs:logo",
+    "predocs:build": "npm run docs:logo",
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
     "docs:preview": "vitepress preview"

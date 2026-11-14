@@ -9,9 +9,10 @@ def main():
     import traceback
 
     from PyQt5.QtCore import Qt, QTranslator
+    from PyQt5.QtGui import QIcon
     from PyQt5.QtWidgets import QApplication
 
-    from videocaptioner.config import TRANSLATIONS_PATH
+    from videocaptioner.config import LOGO_PATH, TRANSLATIONS_PATH
     from videocaptioner.core.utils.cache import disable_cache, enable_cache
     from videocaptioner.core.utils.logger import setup_logger
 
@@ -58,6 +59,7 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)  # type: ignore
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(LOGO_PATH)))
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings, True)  # type: ignore
 
     # i18n

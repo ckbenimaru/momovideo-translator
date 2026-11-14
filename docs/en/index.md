@@ -15,9 +15,6 @@ head:
     - property: og:description
       content: Free & open-source AI subtitle tool powered by Whisper & LLM. Supports 99 languages with intelligent segmentation, professional translation, and one-click processing. Perfect for content creators on YouTube, Bilibili, and other platforms.
   - - meta
-    - property: og:url
-      content: https://weifeng2333.github.io/VideoCaptioner/en/
-  - - meta
     - property: og:locale
       content: en_US
   - - meta
@@ -42,7 +39,7 @@ hero:
   tagline: Open Source · LLM-Powered · Process 14-minute video in 4 minutes, cost less than $0.002
   image:
     src: /logo.png
-    alt: VideoCaptioner
+    alt: momo 字幕助手
   actions:
     - theme: brand
       text: Get Started
@@ -66,7 +63,7 @@ features:
 
   - icon: 📖
     title: Fully Open Source & Free
-    details: MIT license, no hidden fees. Run locally for complete data privacy control. Community-driven continuous improvement.
+    details: GPL-3.0 license, no hidden fees. Run locally for complete data privacy control. Community-driven continuous improvement.
 
   - icon: 💻
     title: No High-End Hardware

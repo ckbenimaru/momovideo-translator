@@ -37,16 +37,14 @@ def _parse_fps(value: object) -> float:
         return 30.0
 
 
-def probe_source_video(video_path: str) -> SourceVideoInfo:
-    """Read the first video stream without relying on localized FFmpeg text."""
+def _probe_streams(video_path: str, entries: str, stream_selector: str = "") -> dict:
     cmd = [
         "ffprobe",
         "-v",
         "error",
-        "-select_streams",
-        "v:0",
+        *(["-select_streams", stream_selector] if stream_selector else []),
         "-show_entries",
-        "stream=codec_name,bit_rate,width,height,avg_frame_rate:format=bit_rate",
+        entries,
         "-of",
         "json",
         video_path,
@@ -57,6 +55,7 @@ def probe_source_video(video_path: str) -> SourceVideoInfo:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=30,
         creationflags=(
             getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         ),
@@ -64,7 +63,16 @@ def probe_source_video(video_path: str) -> SourceVideoInfo:
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed: {result.stderr.strip()}")
 
-    payload = json.loads(result.stdout or "{}")
+    return json.loads(result.stdout or "{}")
+
+
+def probe_source_video(video_path: str) -> SourceVideoInfo:
+    """Read the first video stream without relying on localized FFmpeg text."""
+    payload = _probe_streams(
+        video_path,
+        "stream=codec_name,bit_rate,width,height,avg_frame_rate:format=bit_rate",
+        "v:0",
+    )
     streams = payload.get("streams") or []
     if not streams:
         raise RuntimeError("No video stream found")
@@ -146,6 +154,59 @@ def get_target_bitrate_kbps(crf: int) -> int:
     return _TARGET_BITRATE_BY_CRF[nearest_crf]
 
 
+def build_soft_mp4_args(video_path: str, crf: int, preset: str) -> list[str]:
+    """Select compatible streams and convert only streams that need it."""
+    streams = _probe_streams(
+        video_path,
+        "stream=index,codec_type,codec_name,profile,pix_fmt,level:stream_disposition=attached_pic",
+    ).get("streams", [])
+    video = next(
+        (
+            stream
+            for stream in streams
+            if stream.get("codec_type") == "video"
+            and not (stream.get("disposition") or {}).get("attached_pic")
+        ),
+        None,
+    )
+    if video is None:
+        raise ValueError("No video stream found")
+    args = ["-map", f"0:{video['index']}", "-map", "0:a?", "-map", "1:s:0"]
+    if (
+        video.get("codec_name") == "h264"
+        and video.get("pix_fmt") == "yuv420p"
+        and video.get("profile") in {"Baseline", "Constrained Baseline", "Main", "High"}
+        and 0 < (video.get("level") or 0) <= 51
+    ):
+        args.extend(["-c:v", "copy"])
+    else:
+        target_rate_k = get_target_bitrate_kbps(crf)
+        args.extend(
+            [
+                "-c:v", "libx264",
+                "-preset", preset,
+                "-b:v", f"{target_rate_k}k",
+                "-maxrate", f"{target_rate_k * 5 // 4}k",
+                "-bufsize", f"{target_rate_k * 2}k",
+                "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "high",
+            ]
+        )
+    args.extend(["-tag:v", "avc1", "-c:a", "copy"])
+    audio_streams = (stream for stream in streams if stream.get("codec_type") == "audio")
+    for index, stream in enumerate(audio_streams):
+        if stream.get("codec_name") != "aac" or stream.get("profile") != "LC":
+            args.extend(
+                [
+                    f"-c:a:{index}", "aac",
+                    f"-profile:a:{index}", "aac_low",
+                    f"-b:a:{index}", "192k",
+                ]
+            )
+    return [*args, "-c:s", "mov_text", "-movflags", "+faststart", "-f", "mp4"]
+
+
 def _common_compatibility_args(max_rate_k: int, buffer_k: int) -> List[str]:
     return [
         "-maxrate",
@@ -160,6 +221,8 @@ def _common_compatibility_args(max_rate_k: int, buffer_k: int) -> List[str]:
         "avc1",
         "-c:a",
         "aac",
+        "-profile:a",
+        "aac_low",
         "-b:a",
         "192k",
         "-movflags",

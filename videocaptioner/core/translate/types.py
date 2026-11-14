@@ -2,6 +2,12 @@
 
 from enum import Enum
 
+TRANSLATION_REVIEW_MARKER = "［待確認］"
+
+
+def translation_needs_review(text: str) -> bool:
+    return not text.strip() or TRANSLATION_REVIEW_MARKER in text
+
 
 class TranslatorType(Enum):
     """翻译器类型"""
