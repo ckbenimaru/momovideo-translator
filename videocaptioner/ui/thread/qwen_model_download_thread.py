@@ -1,8 +1,11 @@
 import os
 from pathlib import Path
+from typing import Callable
 
 from huggingface_hub import snapshot_download
 from PyQt5.QtCore import QThread, pyqtSignal
+
+from videocaptioner.core.asr.qwen3_asr import QWEN_MLX_ALIGNER_REPO, QWEN_MLX_ASR_REPO
 
 
 def validate_qwen_model(model_dir: str | Path) -> Path:
@@ -30,6 +33,22 @@ def download_qwen_model(repo_id: str, model_dir: str | Path) -> Path:
         max_workers=4,
     )
     return validate_qwen_model(target)
+
+
+def ensure_mlx_models(
+    root: Path, use_aligner: bool, on_download: Callable[[str], None]
+) -> None:
+    """Download missing Apple Silicon checkpoints when a transcription is started."""
+    repositories = [QWEN_MLX_ASR_REPO]
+    if use_aligner:
+        repositories.append(QWEN_MLX_ALIGNER_REPO)
+    for repo_id in repositories:
+        target = root / repo_id.rsplit("/", 1)[-1]
+        try:
+            validate_qwen_model(target)
+        except RuntimeError:
+            on_download(repo_id)
+            download_qwen_model(repo_id, target)
 
 
 class QwenModelDownloadThread(QThread):

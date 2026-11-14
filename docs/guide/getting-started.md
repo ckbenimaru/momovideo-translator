@@ -32,7 +32,7 @@ uv sync --locked
 uv run --no-sync videocaptioner-gui
 ```
 
-源码启动使用仓库内的设置和模型。Apple Silicon 用户可在「转录模型」选择 Qwen3-ASR，在模型管理中安装独立运行环境、识别模型与 Forced Aligner。
+源码启动使用仓库内的设置和模型。Apple Silicon 用户可在「转录模型」选择 Qwen3-ASR，在模型管理中安装独立 MLX 环境。首次转录会自动下载识别模型，以及启用对齐时所需的 Forced Aligner。
 
 ## 基础配置
 
@@ -40,7 +40,7 @@ uv run --no-sync videocaptioner-gui
 
 ### 1. LLM API 配置（可选但推荐）
 
-LLM 用于字幕断句、优化和翻译。在 **设置 → LLM 配置** 中，使用本机 Ollama 时，先安装并启动 Ollama，再执行 `ollama pull qwen3:4b-instruct-2507-q4_K_M` 下载模型。然后填写 `http://127.0.0.1:11434/v1` 和实际安装的 Qwen3 模型名称，再将翻译目标设为「繁體中文」。使用在线 LLM 时，按供应商要求配置，字幕和上下文会发送到该服务。
+LLM 用于字幕断句、优化和翻译。在 **设置 → LLM 配置** 中，使用本机 Ollama 时，先安装并启动 Ollama，再填写 `http://127.0.0.1:11434/v1`，再将翻译目标设为「繁體中文」。首次使用会自动下载默认的 `qwen3:4b-instruct-2507-q4_K_M` 模型。使用自定义模型时，请先下载或导入，再填写其名称。使用在线 LLM 时，按供应商要求配置，字幕和上下文会发送到该服务。
 
 详细配置方法请查看 [LLM 配置指南](/config/llm)。
 

@@ -5,9 +5,19 @@ from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from videocaptioner.core.asr import transcribe
-from videocaptioner.core.entities import TranscribeOutputFormatEnum, TranscribeTask
+from videocaptioner.core.asr.qwen3_asr import (
+    default_qwen_model_dir,
+    default_qwen_runtime_dir,
+    qwen_runtime_python,
+)
+from videocaptioner.core.entities import (
+    TranscribeModelEnum,
+    TranscribeOutputFormatEnum,
+    TranscribeTask,
+)
 from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.video_utils import video2audio
+from videocaptioner.ui.thread.qwen_model_download_thread import ensure_mlx_models
 
 logger = setup_logger("transcript_thread")
 
@@ -80,6 +90,17 @@ class TranscriptThread(QThread):
         assert self.task.file_path is not None
         assert self.task.transcribe_config is not None
         assert self.task.output_path is not None
+
+        config = self.task.transcribe_config
+        if config.transcribe_model is TranscribeModelEnum.QWEN3_ASR and config.qwen_device == "mlx":
+            runtime_dir = config.qwen_runtime_dir or default_qwen_runtime_dir()
+            if not qwen_runtime_python(runtime_dir).is_file():
+                raise RuntimeError(self.tr("請先在 Qwen3-ASR 模型管理安裝 MLX 執行環境。"))
+            ensure_mlx_models(
+                Path(config.qwen_model_dir or default_qwen_model_dir()),
+                config.qwen_use_forced_aligner,
+                lambda repo: self.progress.emit(2, self.tr("正在下載模型 {0}…").format(repo)),
+            )
 
         video_path = Path(self.task.file_path)
 

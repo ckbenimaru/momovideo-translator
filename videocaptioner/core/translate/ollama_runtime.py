@@ -10,7 +10,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import CancelledError
 from pathlib import Path
+from threading import Event
+from typing import Callable
 from urllib.parse import urlsplit
 
 import psutil
@@ -116,23 +119,69 @@ def ensure_ollama_server(timeout: float = 20.0, *, parallelism: int = 1) -> None
     raise RuntimeError(f"Ollama 離線翻譯服務啟動逾時，請檢查 {executable}。")
 
 
-def ensure_ollama_model(model: str = DEFAULT_OLLAMA_MODEL) -> None:
-    tags = _request("/api/tags", timeout=5.0).get("models", [])
-    available = {item.get("name", "") for item in tags}
-    aliases = {name.removesuffix(":latest") for name in available}
-    if model not in available and model not in aliases:
-        if os.name != "nt":
-            raise RuntimeError(f"離線翻譯模型尚未下載：{model}。請執行 ollama pull {model}。")
+def _pull_default_model(
+    model: str,
+    on_download: Callable[[], None] | None,
+    cancel_event: Event | None,
+) -> None:
+    """Pull the configured default from Ollama, with no subtitle data in the request."""
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError()
+    if on_download is not None:
+        on_download()
+    body = json.dumps({"model": model, "stream": True}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{DEFAULT_OLLAMA_API}/api/pull",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=30) as response:
+            for line in response:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CancelledError()
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                if event.get("error"):
+                    raise RuntimeError(event["error"])
+                if event.get("status") == "success":
+                    return
+        raise RuntimeError("Ollama 未回報下載完成")
+    except (OSError, ValueError, RuntimeError) as error:
         raise RuntimeError(
-            f"離線翻譯模型尚未下載：{model}。模型目錄：{DEFAULT_OLLAMA_MODELS}"
-        )
+            f"無法下載 Ollama 模型 {model}。請檢查網路與磁碟空間，"
+            f"或手動執行 ollama pull {model}。原因：{error}"
+        ) from error
+
+
+def ensure_ollama_model(
+    model: str = DEFAULT_OLLAMA_MODEL,
+    *,
+    on_download: Callable[[], None] | None = None,
+    cancel_event: Event | None = None,
+) -> None:
+    tags = _request("/api/tags", timeout=5.0).get("models", [])
+    available = {(item.get("name") or "").removesuffix(":latest") for item in tags}
+    name = model.removesuffix(":latest")
+    if name in available:
+        return
+    if name == DEFAULT_OLLAMA_MODEL:
+        _pull_default_model(model, on_download, cancel_event)
+        return
+    raise RuntimeError(f"離線翻譯模型尚未下載：{model}。請執行 ollama pull {model}。")
 
 
 def prepare_local_ollama(
-    model: str = DEFAULT_OLLAMA_MODEL, *, parallelism: int = 1
+    model: str = DEFAULT_OLLAMA_MODEL,
+    *,
+    parallelism: int = 1,
+    on_download: Callable[[], None] | None = None,
+    cancel_event: Event | None = None,
 ) -> None:
     ensure_ollama_server(parallelism=parallelism)
-    ensure_ollama_model(model)
+    ensure_ollama_model(model, on_download=on_download, cancel_event=cancel_event)
 
 
 def log_ollama_model_placement(model: str) -> None:

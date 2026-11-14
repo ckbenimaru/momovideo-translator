@@ -1,4 +1,7 @@
+import json
+from concurrent.futures import CancelledError
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -19,10 +22,10 @@ def test_prepare_checks_server_then_model(monkeypatch):
     monkeypatch.setattr(
         ollama_runtime,
         "ensure_ollama_model",
-        lambda model: calls.append(("model", model)),
+        lambda model, **kwargs: calls.append(("model", model, kwargs)),
     )
     ollama_runtime.prepare_local_ollama("qwen-test")
-    assert calls == [("server", 1), ("model", "qwen-test")]
+    assert calls == [("server", 1), ("model", "qwen-test", {"on_download": None, "cancel_event": None})]
 
 
 def test_missing_runtime_has_actionable_error(monkeypatch):
@@ -68,3 +71,51 @@ def test_macos_uses_local_models_unless_overridden(monkeypatch, tmp_path, custom
     ollama_runtime.ensure_ollama_server()
     expected = custom_path if custom_models else (shared_models / "ollama").resolve()
     assert launches[0]["OLLAMA_MODELS"] == str(expected)
+
+
+
+def test_installed_default_skips_download(monkeypatch):
+    model = ollama_runtime.DEFAULT_OLLAMA_MODEL
+    monkeypatch.setattr(ollama_runtime, "_request", lambda *args, **kwargs: {"models": [{"name": model}]})
+    ollama_runtime.ensure_ollama_model(model, on_download=lambda: pytest.fail("already installed"))
+
+
+@pytest.mark.parametrize(
+    ("events", "message"),
+    [
+        ([b'{"status":"pulling manifest"}', b'{"status":"success"}'], None),
+        ([b'{"status":"pulling manifest"}'], "未回報下載完成"),
+        ([b'{"error":"not enough space"}'], "not enough space"),
+    ],
+)
+def test_missing_default_downloads_via_ollama(monkeypatch, events, message):
+    import io
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setattr(ollama_runtime, "_request", lambda *args, **kwargs: {"models": []})
+
+    def open_pull(request, timeout):
+        calls.append((request.full_url, json.loads(request.data), timeout))
+        return io.BytesIO(b"\n".join(events))
+
+    monkeypatch.setattr(
+        ollama_runtime.urllib.request, "build_opener", lambda *args: SimpleNamespace(open=open_pull)
+    )
+    model = ollama_runtime.DEFAULT_OLLAMA_MODEL
+    if message:
+        with pytest.raises(RuntimeError, match=message):
+            ollama_runtime.ensure_ollama_model(model, on_download=lambda: calls.append("download"))
+    else:
+        ollama_runtime.ensure_ollama_model(model, on_download=lambda: calls.append("download"))
+    assert calls == ["download", ("http://127.0.0.1:11434/api/pull", {"model": model, "stream": True}, 30)]
+
+
+def test_cancelled_task_does_not_start_download(monkeypatch):
+    monkeypatch.setattr(ollama_runtime, "_request", lambda *args, **kwargs: {"models": []})
+    event = Event()
+    event.set()
+    with pytest.raises(CancelledError):
+        ollama_runtime.ensure_ollama_model(
+            cancel_event=event, on_download=lambda: pytest.fail("cancelled task requested a download")
+        )

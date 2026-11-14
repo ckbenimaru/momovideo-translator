@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from videocaptioner.ui.thread.qwen_model_download_thread import (
     download_qwen_model,
+    ensure_mlx_models,
     validate_qwen_model,
 )
 from videocaptioner.ui.thread.qwen_runtime_thread import (
@@ -36,6 +37,30 @@ class QwenInstallationTests(unittest.TestCase):
                 self.assertEqual(
                     download_qwen_model("Qwen/Qwen3-ASR-1.7B-hf", target), target
                 )
+
+    def test_mlx_downloads_only_missing_models_enabled_for_the_task(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            asr = "mlx-community/Qwen3-ASR-1.7B-8bit"
+            aligner = "mlx-community/Qwen3-ForcedAligner-0.6B-8bit"
+            requested = []
+
+            def fake_download(repo, target):
+                self.assertEqual(target, root / repo.rsplit("/", 1)[-1])
+                target.mkdir()
+                (target / "config.json").write_text("{}", encoding="utf-8")
+                (target / "model.safetensors").write_bytes(b"test checkpoint")
+                return target
+
+            with patch(
+                "videocaptioner.ui.thread.qwen_model_download_thread.download_qwen_model",
+                side_effect=fake_download,
+            ) as download:
+                ensure_mlx_models(root, False, requested.append)
+                ensure_mlx_models(root, True, requested.append)
+                ensure_mlx_models(root, True, requested.append)
+                self.assertEqual(download.call_count, 2)
+                self.assertEqual(requested, [asr, aligner])
 
     def test_incomplete_qwen_model_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:

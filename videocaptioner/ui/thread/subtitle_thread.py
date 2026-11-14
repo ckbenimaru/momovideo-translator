@@ -105,7 +105,14 @@ class SubtitleThread(QThread):
         if config.base_url and config.api_key and config.llm_model:
             if is_local_ollama_url(config.base_url):
                 self.progress.emit(2, self.tr("正在啟動 Qwen3 離線翻譯..."))
-                prepare_local_ollama(config.llm_model, parallelism=config.thread_num)
+                prepare_local_ollama(
+                    config.llm_model,
+                    parallelism=config.thread_num,
+                    on_download=lambda: self.progress.emit(
+                        2, self.tr("首次使用，正在下載 Qwen3 翻譯模型…")
+                    ),
+                    cancel_event=self._cancel_requested,
+                )
             else:
                 success, message = check_llm_connection(
                     config.base_url,
@@ -418,7 +425,14 @@ class RetranslateThread(QThread):
                 if not (config.base_url and config.api_key and config.llm_model):
                     raise Exception("LLM API 未配置，请检查 LLM 配置")
                 if is_local_ollama_url(config.base_url):
-                    prepare_local_ollama(config.llm_model, parallelism=config.thread_num)
+                    prepare_local_ollama(
+                        config.llm_model,
+                        parallelism=config.thread_num,
+                        on_download=lambda: self.progress.emit(
+                            2, self.tr("首次使用，正在下載 Qwen3 翻譯模型…")
+                        ),
+                        cancel_event=self._cancel_requested,
+                    )
                     uses_local_ollama = True
                 os.environ["OPENAI_BASE_URL"] = config.base_url
                 os.environ["OPENAI_API_KEY"] = config.api_key

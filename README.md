@@ -4,7 +4,7 @@
 
 以 [VideoCaptioner](https://github.com/WEIFENG2333/VideoCaptioner) 為基礎修改的本地影片轉錄、字幕翻譯及影片合成工具。
 
-本倉庫只保存核心原始碼及必要字型，不包含 Python 執行環境、FFmpeg、Faster-Whisper-XXL 程式、Qwen3-ASR 執行環境、Ollama、CUDA 元件或 AI 模型。這些大型元件由使用者按需要自行安裝或在軟體內下載。
+本倉庫只保存原始碼、介面資源及字型，不包含 Python 執行環境、FFmpeg、Faster-Whisper-XXL 程式、Qwen3-ASR 執行環境、Ollama、CUDA 元件或 AI 模型。這些大型元件由使用者按需要自行安裝或在軟體內下載。
 
 ## 主要改動
 
@@ -33,9 +33,9 @@ Faster-Whisper-XXL 與 Qwen3-ASR CUDA 是 Windows 的設定。Apple Silicon 使�
 
 依下方「從原始碼安裝」開啟桌面程式後：
 
-1. 在轉錄模型中選擇 **Qwen3-ASR**，將後端設為 **MLX**，並在模型管理安裝獨立執行環境與 `Qwen3-ASR-1.7B-8bit`。需要詞級時間戳時，另下載 `Qwen3-ForcedAligner-0.6B-8bit` 並啟用對齊。
-2. 安裝 [Ollama](https://ollama.com/download/mac)，確認終端機能執行 `ollama`，開啟 Ollama 後執行 `ollama pull qwen3:4b-instruct-2507-q4_K_M`。
-3. 在 momo 的 LLM 設定選擇 **Ollama**，服務地址填 `http://127.0.0.1:11434/v1`。模型名稱填已下載或匯入的名稱，翻譯目標可設為「繁體中文」。
+1. 在轉錄模型中選擇 **Qwen3-ASR**，將後端設為 **MLX**，並在模型管理安裝獨立執行環境。首次開始轉錄時，程式會從 Hugging Face 下載 `Qwen3-ASR-1.7B-8bit`。開啟詞級時間戳時，會一併下載 `Qwen3-ForcedAligner-0.6B-8bit`。也可先在模型管理按「下載」準備兩個模型。
+2. 安裝 [Ollama](https://ollama.com/download/mac)，確認終端機能執行 `ollama`，並開啟 Ollama。
+3. 在 momo 的 LLM 設定選擇 **Ollama**，服務地址填 `http://127.0.0.1:11434/v1`。翻譯目標可設為「繁體中文」。首次使用時，程式會向 Ollama 下載預設的 `qwen3:4b-instruct-2507-q4_K_M`（約 2.5 GB）。下載期間只會傳送模型名稱，字幕的推理在本機進行。自訂模型可自行匯入或先執行 `ollama pull 模型名稱`。
 
 24 GiB 以上的 Apple Silicon Mac 預設最多同時翻譯四條字幕，每個請求處理一條。程式自行啟動 Ollama 時使用 4096 token 上下文；已在執行的 Ollama 會沿用該服務的設定。
 
@@ -66,7 +66,7 @@ uv sync --locked
 uv run --no-sync videocaptioner-gui
 ```
 
-此版本從原始碼安裝。GitHub 原始碼下載包含桌面程式與字型，Python 執行環境、模型及 macOS `.app` 啟動器需另行準備。
+此版本從原始碼安裝。GitHub 原始碼下載包含桌面程式與字型，Python 執行環境及模型權重另行安裝或下載。這次公開更新為原始碼版本。
 
 ## Faster Whisper 與模型
 
